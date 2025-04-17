@@ -545,6 +545,6 @@ export const setupErrorHandlers = (socket) => {
     console.log(`Reconnecté avec succès après ${attempt} tentative(s)`);
   });
   socket.on("disconnect", () => {
-    global.connectedUsers.delete(socket.userData._id.toString());
+    global.connectedUsers.delete(socket.userData?._id?.toString());
   });
 };
