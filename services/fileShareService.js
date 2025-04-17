@@ -253,3 +253,26 @@ export const updateFileShare = async (fileShareId, userId, updateData) => {
     throw error;
   }
 };
+
+export const updateFileInShare = async (fileShareId, fileId, userId) => {
+  try {
+    const fileShare = await FileShare.findOne({ _id: fileShareId, owner: userId });
+
+    if (!fileShare) {
+      throw new Error('File share not found or you are not the owner');
+    }
+
+    const fileToUpdate = fileShare.files.find(file => file.fileId === fileId);
+    if (!fileToUpdate) {
+      throw new Error('File not found in the share');
+    }
+
+    fileToUpdate.isActive = !fileToUpdate.isActive;
+    await fileShare.save();
+
+    return fileShare;
+  } catch (error) {
+    console.error('Error updating file in share:', error);
+    throw error;
+  }
+}

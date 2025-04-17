@@ -6,7 +6,7 @@ import {
   updateFileShare,
   updateFileInShare,
 } from "../services/fileShareService.js";
-import FileShare from "../models/fileShare.model.js";
+import FileShare from "../models/fileShareSchema.mdel.js";
 
 export const setupFileShareSocket = (socket) => {
   // Create a new file share
