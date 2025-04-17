@@ -39,7 +39,7 @@ const io = new SocketIO(server, {
   reconnectionDelay: 1000, //Delai de reconnexion
   transports: ["websocket"], // Force WebSocket uniquement
   cors: {
-    origin: process.env.CORS_ORIGIN,
+    origin: "*",
     methods: ["GET", "POST"],
   },
 });
