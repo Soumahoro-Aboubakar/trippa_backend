@@ -28,9 +28,12 @@ const NotificationSchema = new mongoose.Schema({
             'payment_received',
             'payment_sent',
             'game_invitation',
+            "status_deactivated",
+            "status_reactivated",
             'system_notification',
             "payment_update",
             "refund_processed",
+            "insufficient_funds",
             "room_update",
         ],
         required: true

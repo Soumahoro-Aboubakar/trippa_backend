@@ -280,7 +280,7 @@ export const socketMessageHandlers = (io, socket) => {
 
     return { roomId: savedRoom._id, isNew: true };
   }
- socket.on('start_upload', (metadata) => {
+/*  socket.on('start_upload', (metadata) => {
     // Initialiser l'upload avec toutes les métadonnées nécessaires
     activeUploads.set(metadata.fileId, {
       ...metadata, // fileID, fileName, mimeType, mediaType, messageType, targetId, content, isAnonymous, totalChunks, mediaDuration
@@ -376,11 +376,11 @@ export const socketMessageHandlers = (io, socket) => {
         });
       }
     }
-  });
+  }); */
 
 
 
-  socket.on('message:text', async (message) => {
+  socket.on('message:create', async (message) => {
     const messageData = dataParse(message);
     try {
       if (!message.room) {
@@ -393,7 +393,6 @@ export const socketMessageHandlers = (io, socket) => {
       const newMessage = new Message({
         sender: socket.userData._id,
         ...messageData,
-        type: 'text'
       });
 
       const savedMessage = await newMessage.save();
@@ -546,7 +545,6 @@ export const setupErrorHandlers = (socket) => {
     console.log(`Reconnecté avec succès après ${attempt} tentative(s)`);
   });
   socket.on("disconnect", () => {
-    console.log(`Utilisateur déconnecté: ${socket.userData._id}`);
     global.connectedUsers.delete(socket.userData._id.toString());
   });
 };

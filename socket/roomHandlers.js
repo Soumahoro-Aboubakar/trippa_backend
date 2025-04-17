@@ -4,7 +4,7 @@ import Payment from "../models/payment.model.js";
 import User from "../models/user.model.js";
 import { createNotification } from "../services/notificationService.js";
 import { dataParse } from "../utils/validator.js";
-import { sendNotificationToUsers, userIsConnected } from "./UserFunctionHandler.js";
+import { sendNotificationToUsers } from "./UserFunctionHandler.js";
 
 export function setupRoomSocket(io, socket) {
 
