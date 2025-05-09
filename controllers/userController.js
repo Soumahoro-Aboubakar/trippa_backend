@@ -122,7 +122,8 @@ export const createUser = async (socket, userData) => {
     await sendVerificationCode(trimmedPhone, code);
 
     socket.userData = {
-      _id: user._id,
+      // _id: user._id,
+      ...user,
     };
 
     // 📤 7. Réponse au client
@@ -298,21 +299,15 @@ export const getUserProfile = async (socket, userId) => {
 // Mettre à jour le profil utilisateur
 export const updateUserProfile = async (socket, updateData) => {
   try {
-    const {
-      bio,
-      interests,
-      isShyMode,
-      visibility,
-      photo,
-     userPseudo
-    } = updateData;
+    const { bio, interests, isShyMode, visibility, photo, userPseudo } =
+      updateData;
     const updatePayload = {
       "profile.bio": bio || "",
       "profile.interests": interests || [],
       "profile.isShyMode": isShyMode || false,
       "profile.visibility": visibility || "public",
       "profile.userPseudo": userPseudo || "",
-      "profile.photo": photo || ""
+      "profile.photo": photo || "",
     };
 
     // Mise à jour atomique avec validation

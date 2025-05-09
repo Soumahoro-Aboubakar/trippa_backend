@@ -29,6 +29,7 @@ const authEvenNames = [
   "verification:code",
   "create_user",
   "resent:verification_code",
+  "update:refresh_token",
 ];
 
 // Configuration de Socket.IO
@@ -70,6 +71,9 @@ io.use((socket, next) => {
       next();
     })
     .catch((error) => {
+      socket.onAny((eventName, ...args) => {
+        if (eventName && authEvenNames.includes(eventName.trim())) next();
+      });
       if (error.name === "TokenExpiredError") {
         socket.emit("expired:token", { message: "Token expiré" });
       }
@@ -83,8 +87,7 @@ io.on("connection", async (socket) => {
   socket.on("update:refresh_token", async (data) => {
     try {
       const result = await refreshUserToken({
-        ...dataParse(data),
-        userId: socket.userData._id,
+        ...data,
       });
       if (result.error) {
         socket.emit("refresh_error", result.error);
