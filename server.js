@@ -20,7 +20,7 @@ import { configureBusinessSocket } from "./socket/businessHandlers.js";
 import { configureStatusSocket } from "./socket/statusHandlers.js";
 import { markExpiredFileShares } from "./services/fileShareService.js";
 import { setupFileShareSocket } from "./socket/fileShareHandlers.js";
-
+import http from "http";
 dotenv.config();
 // Configuration d'Express
 const app = express();
@@ -56,6 +56,23 @@ mongoose
 
 // Configuration des routes Express (si besoin)
 app.use(express.json());
+
+// Route basique
+app.get('/ping', (req, res) => {
+  res.send('Server is alive!'); //après un certain temps, render met le serveur en veille. cette route permet de garder le serveur en vie
+});
+// Fonction de self-ping toutes les 60 secondes
+
+function autoPing() {
+  setInterval(() => {
+    http.get(process.env.SELF_URL, (res) => {
+      console.log(`Pinged self: ${res.statusCode}`);
+    }).on('error', (err) => {
+      console.error(`Ping error: ${err.message}`);
+    });
+  }, 60 * 5000); //5 minutes
+}
+
 global.connectedUsers = new Map();
 // Middleware d'authentification Socket.IO
 io.use((socket, next) => {
@@ -143,4 +160,5 @@ setInterval(async () => {
 // Démarrage du serveur
 server.listen(process.env.PORT, () => {
   console.log(`Serveur démarré sur le port ${process.env.PORT}`);
+  autoPing();
 });
