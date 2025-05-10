@@ -20,7 +20,6 @@ import { configureBusinessSocket } from "./socket/businessHandlers.js";
 import { configureStatusSocket } from "./socket/statusHandlers.js";
 import { markExpiredFileShares } from "./services/fileShareService.js";
 import { setupFileShareSocket } from "./socket/fileShareHandlers.js";
-import http from "http";
 dotenv.config();
 // Configuration d'Express
 const app = express();
