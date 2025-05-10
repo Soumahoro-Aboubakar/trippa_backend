@@ -20,6 +20,7 @@ import { configureBusinessSocket } from "./socket/businessHandlers.js";
 import { configureStatusSocket } from "./socket/statusHandlers.js";
 import { markExpiredFileShares } from "./services/fileShareService.js";
 import { setupFileShareSocket } from "./socket/fileShareHandlers.js";
+import https from "https";
 dotenv.config();
 // Configuration d'Express
 const app = express();
@@ -64,7 +65,7 @@ app.get('/ping', (req, res) => {
 
 function autoPing() {
   setInterval(() => {
-    http.get(process.env.SELF_URL, (res) => {
+    https.get(process.env.SELF_URL, (res) => {
       console.log(`Pinged self: ${res.statusCode}`);
     }).on('error', (err) => {
       console.error(`Ping error: ${err.message}`);
