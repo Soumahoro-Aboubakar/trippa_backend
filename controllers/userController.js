@@ -8,7 +8,7 @@ import dotenv from "dotenv";
 import twilio from "twilio";
 const client = twilio(process.env.ACCOUNT_SID, process.env.AUTH_TOKEN_TWILIO);
 function generateCode() {
-  return Math.floor(100000 + Math.random() * 900000); // exemple : 472193
+  return Math.floor(1000 + Math.random() * 9000); // exemple : 4721
 }
 dotenv.config();
 
@@ -145,16 +145,16 @@ export const createUser = async (socket, userData) => {
  * @param {Object} socket - Socket.io socket
  * @param {string} code - Code de vérification SMS
  */
-export const verifyUserSMS = async (socket, code, deviceId) => {
+export const verifyUserSMS = async (socket, code, deviceId, phoneNumber) => {
   try {
-    if (!socket.userData._id || !code) {
+    if (!phoneNumber || !code) {
       socket.emit("verification:error", {
         message: "Session expirée, veuillez recommencer",
       });
       return;
     }
 
-    const user = await User.findById(socket.userData._id);
+    const user = await User.findOne({ phone: phoneNumber });
     if (!user) {
       socket.emit("verification:error", {
         code: 403,
@@ -209,6 +209,7 @@ export const resendSmsVerificationCode = async (socket, phone) => {
       });
       return;
     }
+
     const trimmedPhone = phone.trim();
     const user = await User.findOne({ phone: trimmedPhone });
 

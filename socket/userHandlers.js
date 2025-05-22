@@ -20,8 +20,8 @@ export default function userHandlers(io, socket) {
   }); */
   socket.on("verification:code", async (data) => {
     try {
-      const { deviceId, code } = dataParse(data);
-      await verifyUserSMS(socket, code, deviceId);
+      const { deviceId, code , phoneNumber } = dataParse(data);
+      await verifyUserSMS(socket, code, deviceId, phoneNumber);
     }
     catch (error) {
       console.error(`Erreur lors de la vérification de l'utilisateur: ${error.message}`);
