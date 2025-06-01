@@ -11,7 +11,7 @@ const MessageSchema = new Schema({
     isAnonymous: Boolean,
     status: {
         type: String,
-        enum: ['SENT', 'DELIVERED',  'READ', 'FAILED'], 
+        enum: ['SENT', 'DELIVERED',  'READ', 'FAILED' , "PENDING"], 
         default: 'SENT'
     },
     isArchived: { type: Boolean, default: false },
