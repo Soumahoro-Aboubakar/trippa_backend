@@ -20,7 +20,7 @@ export function setupRoomSocket(io, socket) {
                 refundPeriodDays = 0, // Default no refund
                 members = [],
                 ...otherRoomData
-            } = dataParse(roomData);
+            } = roomData;
 
             // Validate paid room data
             if (isPaid && (!price || price <= 0)) {

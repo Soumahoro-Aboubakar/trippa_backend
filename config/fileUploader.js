@@ -279,7 +279,7 @@ class UploadService {
       if (persistentUpload) {
         // Charger les chunks déjà reçus
         const buffer = this.loadPersistentChunks(
-          metadata.fileId,
+          metadata.fileId, //le fileId est composer du lien de local (path file), combinner au id de l'utilisateur
           metadata.totalChunks
         ); //totalChunks represent la taille en entier
 

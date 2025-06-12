@@ -119,8 +119,8 @@ export const createUser = async (socket, userData) => {
       await user.save();
     }
 
-    await sendVerificationCode(trimmedPhone, code);
-
+    //await sendVerificationCode(trimmedPhone, code);
+    console.log(user?.verifyCode?.code ,  "   le code de validation est donné par ici");
     socket.userData = {
       // _id: user._id,
       ...user,
