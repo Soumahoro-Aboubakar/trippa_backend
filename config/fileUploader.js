@@ -341,40 +341,78 @@ class UploadManager {
 // Instance globale du gestionnaire d'upload
 const uploadManager = new UploadManager();
 
-// Fonctions de cryptographie
 function decryptChunk(encryptedData, encryptionKey) {
   try {
-    // Créer la clé de 32 bytes à partir de la clé fournie
-    const key = Buffer.from(encryptionKey.padEnd(32, '\0').slice(0, 32), 'utf8');
+    console.log(`Tentative de déchiffrement: ${encryptedData.length} bytes`);
     
-    // IV de 16 bytes (correspond à l'implémentation Flutter)
+    // Créer la clé de 32 bytes exactement comme dans Flutter
+    const keyBuffer = Buffer.alloc(32);
+    const keyBytes = Buffer.from(encryptionKey, 'utf8');
+    
+    // Copier les bytes de la clé et remplir avec des zéros
+    for (let i = 0; i < 32; i++) {
+      if (i < keyBytes.length) {
+        keyBuffer[i] = keyBytes[i];
+      } else {
+        keyBuffer[i] = 0;
+      }
+    }
+    
+    console.log(`Clé générée: ${keyBuffer.toString('hex')}`);
+    
+    // IV de 16 bytes tous à zéro (comme dans Flutter)
     const iv = Buffer.alloc(16, 0);
     
-    const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
+    console.log(`IV utilisé: ${iv.toString('hex')}`);
+    
+    // Créer le déchiffreur
+    const decipher = crypto.createDecipheriv('aes-256-cbc', keyBuffer, iv);
     decipher.setAutoPadding(true);
     
+    // Déchiffrer
     const decrypted = Buffer.concat([
       decipher.update(encryptedData),
       decipher.final()
     ]);
     
+    console.log(`Déchiffrement réussi: ${decrypted.length} bytes`);
     return decrypted;
+    
   } catch (error) {
+    console.error(`Erreur de déchiffrement détaillée:`, {
+      message: error.message,
+      code: error.code,
+      encryptedDataLength: encryptedData.length,
+      keyLength: encryptionKey.length
+    });
     throw new Error(`Decryption failed: ${error.message}`);
   }
 }
 
+// Fonction de décompression avec gestion d'erreur améliorée
 function decompressChunk(compressedData) {
   try {
-    return zlib.inflateSync(compressedData);
+    console.log(`Tentative de décompression: ${compressedData.length} bytes`);
+    const decompressed = zlib.inflateSync(compressedData);
+    console.log(`Décompression réussie: ${decompressed.length} bytes`);
+    return decompressed;
   } catch (error) {
+    console.error(`Erreur de décompression:`, {
+      message: error.message,
+      compressedDataLength: compressedData.length,
+      firstBytes: compressedData.slice(0, 16).toString('hex')
+    });
     throw new Error(`Decompression failed: ${error.message}`);
   }
 }
 
+// Fonction de validation du hash améliorée
 function calculateHash(data) {
-  return crypto.createHash('sha256').update(data).digest('hex');
+  const hash = crypto.createHash('sha256').update(data).digest('hex');
+  console.log(`Hash calculé: ${hash}`);
+  return hash;
 }
+
 
 // Validation des inputs
 function validateChunkInput(data) {
@@ -533,131 +571,144 @@ export const mediaUploader = async (socket) => {
   });
 
   // Réception d'un chunk
-  socket.on('file_chunk', async (data) => {
-    try {
-      // Validation des inputs
-      validateChunkInput(data);
-      
-      const { index, fileId, data: encodedChunk, userId, size, hash } = data;
-      
-      // Vérifier la session
-      const session = uploadManager.getSession(fileId);
-      if (!session) {
-        socket.emit('chunk_received', {
-          fileId,
-          index,
-          success: false,
-          error: 'No active upload session found'
-        });
-        return;
-      }
-
-      // Vérifier que le chunk n'a pas déjà été reçu
-      if (session.receivedChunks.has(index)) {
-        socket.emit('chunk_received', {
-          fileId,
-          index,
-          success: true,
-          message: 'Chunk already received'
-        });
-        return;
-      }
-
-      // Décoder le chunk
-      const encryptedData = Buffer.from(encodedChunk, 'base64');
-      
-      // Déchiffrer
-      const compressedData = decryptChunk(encryptedData, ENCRYPTION_KEY);
-      
-      // Décompresser
-      const originalData = decompressChunk(compressedData);
-      
-      // Vérifier la taille
-      if (originalData.length !== size) {
-        socket.emit('chunk_received', {
-          fileId,
-          index,
-          success: false,
-          error: `Size mismatch: expected ${size}, got ${originalData.length}`
-        });
-        return;
-      }
-      
-      // Vérifier le hash
-      const calculatedHash = calculateHash(originalData);
-      if (calculatedHash !== hash) {
-        socket.emit('chunk_received', {
-          fileId,
-          index,
-          success: false,
-          error: 'Hash verification failed'
-        });
-        return;
-      }
-      
-      // Sauvegarder le chunk
-      const chunkPath = path.join(UPLOAD_DIR, fileId, `chunk_${index}`);
-      await fs.writeFile(chunkPath, originalData);
-      
-      // Marquer le chunk comme reçu
-      uploadManager.addChunk(fileId, index, originalData);
-      
-      // Répondre au client
+socket.on('file_chunk', async (data) => {
+  try {
+    console.log(`\n=== Traitement du chunk ${data.index} ===`);
+    console.log(`FileId: ${data.fileId}`);
+    console.log(`Taille attendue: ${data.size}`);
+    console.log(`Hash attendu: ${data.hash}`);
+    
+    // Validation des inputs
+    validateChunkInput(data);
+    
+    const { index, fileId, data: encodedChunk, userId, size, hash } = data;
+    
+    // Vérifier la session
+    const session = uploadManager.getSession(fileId);
+    if (!session) {
+      console.log(`Session non trouvée pour fileId: ${fileId}`);
       socket.emit('chunk_received', {
         fileId,
         index,
-        success: true
-      });
-
-      // Vérifier si l'upload est terminé
-      if (uploadManager.isComplete(fileId)) {
-        console.log(`Upload completed for file: ${fileId}`);
-        
-        try {
-          const finalBuffer = await reconstructFile(fileId, session);
-          
-          // Ici vous pouvez intégrer votre fonction handleMediaUpload
-          const mediaResult = await handleMediaUpload(socket, {
-            buffer: [finalBuffer], // Format attendu par votre fonction
-            fileName: session.fileName || `${fileId}.bin`,
-            mimeType: session.mimeType || 'application/octet-stream',
-            mediaDuration: data.mediaDuration || null
-          });
-
-          if (mediaResult && mediaResult.filePath) {
-            uploadManager.markFileCompleted(fileId, mediaResult.filePath);
-          }
-          socket.emit('upload_complete', {
-            fileId,
-            success: true,
-            result: mediaResult
-          });
-
-          // Nettoyer
-          await uploadManager.cleanupTempFiles(fileId);
-          uploadManager.removeSession(fileId);
-
-        } catch (error) {
-          console.error('File reconstruction/upload error:', error);
-          socket.emit('upload_complete', {
-            fileId,
-            success: false,
-            error: error.message
-          });
-        }
-      }
-
-    } catch (error) {
-      console.error('Chunk processing error:', error);
-      socket.emit('chunk_received', {
-        fileId: data.fileId,
-        index: data.index,
         success: false,
-        error: error.message
+        error: 'No active upload session found'
       });
+      return;
     }
-  });
 
+    // Vérifier que le chunk n'a pas déjà été reçu
+    if (session.receivedChunks.has(index)) {
+      console.log(`Chunk ${index} déjà reçu`);
+      socket.emit('chunk_received', {
+        fileId,
+        index,
+        success: true,
+        message: 'Chunk already received'
+      });
+      return;
+    }
+
+    // Décoder le chunk
+    console.log(`Décodage base64: ${encodedChunk.length} caractères`);
+    const encryptedData = Buffer.from(encodedChunk, 'base64');
+    console.log(`Données chiffrées: ${encryptedData.length} bytes`);
+    
+    // Déchiffrer
+    const compressedData = decryptChunk(encryptedData, ENCRYPTION_KEY);
+    
+    // Décompresser
+    const originalData = decompressChunk(compressedData);
+    
+    // Vérifier la taille
+    if (originalData.length !== size) {
+      console.error(`Erreur de taille: attendu ${size}, reçu ${originalData.length}`);
+      socket.emit('chunk_received', {
+        fileId,
+        index,
+        success: false,
+        error: `Size mismatch: expected ${size}, got ${originalData.length}`
+      });
+      return;
+    }
+    
+    // Vérifier le hash
+    const calculatedHash = calculateHash(originalData);
+    if (calculatedHash !== hash) {
+      console.error(`Erreur de hash: attendu ${hash}, calculé ${calculatedHash}`);
+      socket.emit('chunk_received', {
+        fileId,
+        index,
+        success: false,
+        error: 'Hash verification failed'
+      });
+      return;
+    }
+    
+    // Sauvegarder le chunk
+    const chunkPath = path.join(UPLOAD_DIR, fileId, `chunk_${index}`);
+    await fs.writeFile(chunkPath, originalData);
+    console.log(`Chunk ${index} sauvegardé: ${chunkPath}`);
+    
+    // Marquer le chunk comme reçu
+    uploadManager.addChunk(fileId, index, originalData);
+    
+    // Répondre au client
+    socket.emit('chunk_received', {
+      fileId,
+      index,
+      success: true
+    });
+
+    console.log(`=== Chunk ${index} traité avec succès ===\n`);
+
+    // Vérifier si l'upload est terminé
+    if (uploadManager.isComplete(fileId)) {
+      console.log(`Upload terminé pour le fichier: ${fileId}`);
+      
+      try {
+        const finalBuffer = await reconstructFile(fileId, session);
+        
+        const mediaResult = await handleMediaUpload(socket, {
+          buffer: [finalBuffer],
+          fileName: session.fileName || `${fileId}.bin`,
+          mimeType: session.mimeType || 'application/octet-stream',
+          mediaDuration: data.mediaDuration || null
+        });
+
+        if (mediaResult && mediaResult.filePath) {
+          uploadManager.markFileCompleted(fileId, mediaResult.filePath);
+        }
+        
+        socket.emit('upload_complete', {
+          fileId,
+          success: true,
+          result: mediaResult
+        });
+
+        // Nettoyer
+        await uploadManager.cleanupTempFiles(fileId);
+        uploadManager.removeSession(fileId);
+
+      } catch (error) {
+        console.error('Erreur de reconstruction/upload:', error);
+        socket.emit('upload_complete', {
+          fileId,
+          success: false,
+          error: error.message
+        });
+      }
+    }
+
+  } catch (error) {
+    console.error(`Erreur de traitement du chunk ${data.index}:`, error);
+    socket.emit('chunk_received', {
+      fileId: data.fileId,
+      index: data.index,
+      success: false,
+      error: error.message
+    });
+  }
+});
   // Obtenir le statut d'une session
   socket.on('get_upload_status', async (data) => {
     try {
