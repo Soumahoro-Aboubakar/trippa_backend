@@ -1,745 +1,689 @@
-import { handleMediaUpload } from "../services/mediaService.js";
-import fs from "fs";
-import path from "path";
-import os from "os";
 
-// Constantes pour la configuration
-const CHUNK_TIMEOUT = 300000; // 5 minutes (plus long pour les connexions instables)
-const PROGRESS_REPORT_INTERVAL = 5; // Rapport tous les 5 chunks
-const CLEANUP_INTERVAL = 3600000; // 1 heure (plus long pour permettre les reprises)
-const TEMP_UPLOAD_DIR = path.join(os.tmpdir(), "trippa_uploads");
+import crypto from 'crypto';
+import zlib from 'zlib';
+import fs from 'fs-extra';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { handleMediaUpload } from '../services/mediaService.js';
 
-// Créer le répertoire temporaire s'il n'existe pas
-if (!fs.existsSync(TEMP_UPLOAD_DIR)) {
-  fs.mkdirSync(TEMP_UPLOAD_DIR, { recursive: true });
-}
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-class UploadService {
-  constructor(io) {
-    this.io = io;
-    this.activeUploads = new Map();
-    this.persistentUploads = new Map(); // Pour stocker les infos entre les sessions
 
-    // Charger les uploads persistants au démarrage
-    this.loadPersistentUploads();
+const UPLOAD_DIR = path.join(__dirname, 'uploads');
+const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || 'u4Vb7x2MTZ3qYpnDfKLaX1gRhPBwEc5s'; // 32 caractères
+const MAX_CHUNK_SIZE = process.env.MAX_CHUNK_SIZE || 2 * 1024 * 1024;     // 2 * 1024 * 1024; // 2MB max par chunk
+const MAX_FILE_SIZE =  process.env.MAX_FILE_SIZE || 100 * 1024 * 1024;    ///100 * 1024 * 1024; // 100MB max par fichier
 
-    // Nettoyage périodique des uploads abandonnés
-    setInterval(() => this.cleanupStaleUploads(), CLEANUP_INTERVAL);
+// Assurer que le dossier uploads existe
+await fs.ensureDir(UPLOAD_DIR);
+
+// Gestionnaire de sessions d'upload
+class UploadManager {
+  constructor() {
+    this.sessions = new Map();
+    // Démarrer le nettoyage automatique
+    this.startCleanupTimer();//5 min
+    this.startAdvancedCleanup();
+        this.completedFiles = new Map(); // Tracker les fichiers terminés
   }
 
-  /**
-   * Charge les informations des uploads persistants
-   */
-  loadPersistentUploads() {
-    try {
-      const files = fs.readdirSync(TEMP_UPLOAD_DIR);
-      for (const file of files) {
-        if (file.endsWith(".json")) {
-          try {
-            const fileId = file.replace(".json", "");
-            const metadataPath = path.join(TEMP_UPLOAD_DIR, file);
-            const metadata = JSON.parse(fs.readFileSync(metadataPath, "utf8"));
-
-            // Restaurer les informations de l'upload
-            this.persistentUploads.set(fileId, {
-              ...metadata,
-              receivedChunks: new Set(metadata.receivedChunks),
-              lastActivity: Date.now(),
-              isPaused: true,
-            });
-          } catch (err) {
-            console.error(
-              `Erreur lors du chargement de l'upload persistant: ${file}`,
-              err
-            );
-          }
-        }
-      }
-    } catch (err) {
-      console.error("Erreur lors du chargement des uploads persistants:", err);
-    }
-  }
-
-  /**
-   * Sauvegarde les métadonnées d'un upload pour permettre la reprise
-   * @param {string} fileId - L'ID du fichier
-   * @param {Object} upload - Les données d'upload
-   */
-  savePersistentUpload(fileId, upload) {
-    try {
-      const metadataPath = path.join(TEMP_UPLOAD_DIR, `${fileId}.json`);
-      const chunkDirPath = path.join(TEMP_UPLOAD_DIR, fileId);
-
-      // Créer le répertoire pour les chunks si nécessaire
-      if (!fs.existsSync(chunkDirPath)) {
-        fs.mkdirSync(chunkDirPath, { recursive: true });
-      }
-
-      // Convertir Set en Array pour la sérialisation
-      const serializedUpload = {
-        ...upload,
-        receivedChunks: Array.from(upload.receivedChunks),
-        socket: undefined, // Ne pas sérialiser le socket
-        buffer: undefined, // Ne pas sérialiser le buffer complet
-        lastActivity: Date.now(),
-      };
-
-      // Sauvegarder les métadonnées
-      fs.writeFileSync(metadataPath, JSON.stringify(serializedUpload), "utf8");
-
-      // Sauvegarder les chunks individuellement
-      for (const index of upload.receivedChunks) {
-        const chunkPath = path.join(chunkDirPath, `${index}.chunk`);
-        if (upload.buffer[index] && !fs.existsSync(chunkPath)) {
-          fs.writeFileSync(chunkPath, upload.buffer[index]);
-        }
-      }
-
-      // Mettre à jour la map des uploads persistants
-      this.persistentUploads.set(fileId, {
-        ...serializedUpload,
-        receivedChunks: upload.receivedChunks, // Garder le Set original
-      });
-
-      return true;
-    } catch (err) {
-      console.error(
-        `Erreur lors de la sauvegarde de l'upload persistant: ${fileId}`,
-        err
-      );
-      return false;
-    }
-  }
-
-  /**
-   * Charge les chunks d'un upload persistant
-   * @param {string} fileId - L'ID du fichier
-   * @param {number} totalChunks - Nombre total de chunks
-   * @returns {Array} - Tableau des chunks chargés
-   */
-  loadPersistentChunks(fileId, totalChunks) {
-    try {
-      const chunkDirPath = path.join(TEMP_UPLOAD_DIR, fileId);
-      const buffer = new Array(totalChunks);
-
-      if (fs.existsSync(chunkDirPath)) {
-        const files = fs.readdirSync(chunkDirPath);
-        for (const file of files) {
-          if (file.endsWith(".chunk")) {
-            const index = parseInt(file.replace(".chunk", ""));
-            const chunkPath = path.join(chunkDirPath, file);
-            buffer[index] = fs.readFileSync(chunkPath);
-          }
-        }
-      }
-
-      return buffer;
-    } catch (err) {
-      console.error(
-        `Erreur lors du chargement des chunks persistants: ${fileId}`,
-        err
-      );
-      return new Array(totalChunks);
-    }
-  }
-
-  /**
-   * Supprime les données persistantes d'un upload
-   * @param {string} fileId - L'ID du fichier
-   */
-  removePersistentUpload(fileId) {
-    try {
-      const metadataPath = path.join(TEMP_UPLOAD_DIR, `${fileId}.json`);
-      const chunkDirPath = path.join(TEMP_UPLOAD_DIR, fileId);
-
-      // Supprimer les métadonnées
-      if (fs.existsSync(metadataPath)) {
-        fs.unlinkSync(metadataPath);
-      }
-
-      // Supprimer les chunks
-      if (fs.existsSync(chunkDirPath)) {
-        const files = fs.readdirSync(chunkDirPath);
-        for (const file of files) {
-          fs.unlinkSync(path.join(chunkDirPath, file));
-        }
-        fs.rmdirSync(chunkDirPath);
-      }
-
-      // Supprimer de la map
-      this.persistentUploads.delete(fileId);
-
-      return true;
-    } catch (err) {
-      console.error(
-        `Erreur lors de la suppression de l'upload persistant: ${fileId}`,
-        err
-      );
-      return false;
-    }
-  }
-
-  /**
-   * Initialise les gestionnaires d'événements pour les sockets
-   * @param {Socket} socket - L'instance de socket à configurer
-   */
-  registerSocketHandlers(socket) {
-    // Gestionnaire pour démarrer un téléchargement
-    socket.on("start_upload", (metadata) =>
-      this.handleStartUpload(socket, metadata)
-    );
-
-    // Gestionnaire pour recevoir les chunks de fichier
-    socket.on("file_chunk", async (data) => this.handleFileChunk(socket, data));
-
-    // Gestionnaire pour annuler un téléchargement
-    socket.on("cancel_upload", (data) =>
-      this.cancelUpload(data.fileId, socket)
-    );
-
-    // Gestionnaire pour mettre en pause un téléchargement
-    socket.on("pause_upload", (data) => this.pauseUpload(data.fileId, socket));
-
-    // Gestionnaire pour reprendre un téléchargement
-    socket.on("resume_upload", (data) =>
-      this.resumeUpload(data.fileId, socket)
-    );
-
-    // Gestionnaire pour récupérer les uploads en cours/en pause
-    socket.on("get_uploads", (data, callback) => {
-      const uploads = this.getUserUploads(socket.userId || data.userId);
-      callback(uploads);
-    });
-
-    // Nettoyage lors de la déconnexion (mais sans supprimer les données)
-    socket.on("disconnect", () => this.handleDisconnect(socket));
-  }
-
-  /**
-   * Récupère les uploads d'un utilisateur
-   * @param {string} userId - ID de l'utilisateur
-   * @returns {Array} - Liste des uploads de l'utilisateur
-   */
-  getUserUploads(userId) {
-    if (!userId) return [];
-
-    const uploads = [];
-
-    // Ajouter les uploads actifs
-    for (const [fileId, upload] of this.activeUploads.entries()) {
-      if (upload.userId === userId) {
-        uploads.push(this.getUploadInfo(fileId));
-      }
-    }
-
-    // Ajouter les uploads persistants
-    for (const [fileId, upload] of this.persistentUploads.entries()) {
-      if (upload.userId === userId && !this.activeUploads.has(fileId)) {
-        uploads.push({
-          fileId,
-          fileName: upload.fileName,
-          mimeType: upload.mimeType,
-          progress: Math.floor(
-            (upload.receivedChunks.size / upload.totalChunks) * 100
-          ),
-          isPaused: true,
-          totalChunks: upload.totalChunks,
-          receivedChunks: upload.receivedChunks.size,
-          lastActivity: upload.lastActivity,
-        });
-      }
-    }
-
-    return uploads;
-  }
-
-  /**
-   * Gère le début d'un upload
-   * @param {Socket} socket - L'instance de socket
-   * @param {Object} metadata - Les métadonnées du fichier
-   */
-  handleStartUpload(socket, metadata) {
-    try {
-      // Validation des métadonnées
-      if (
-        !metadata ||
-        !metadata.fileId ||
-        !metadata.totalChunks ||
-        metadata.totalChunks <= 0
-      ) {
-        return socket.emit("upload_error", {
-          fileId: metadata?.fileId,
-          error: "Métadonnées invalides",
-          code: "INVALID_METADATA",
-        });
-      }
-
-      // Vérifier si c'est une reprise d'upload
-      const persistentUpload = this.persistentUploads.get(metadata.fileId);
-      if (persistentUpload) {
-        // Charger les chunks déjà reçus
-        const buffer = this.loadPersistentChunks(
-          metadata.fileId, //le fileId est composer du lien de local (path file), combinner au id de l'utilisateur
-          metadata.totalChunks
-        ); //totalChunks represent la taille en entier
-
-        // Initialiser l'upload avec les données persistantes
-        this.activeUploads.set(metadata.fileId, {
-          ...metadata,
-          buffer,
-          receivedChunks: new Set(persistentUpload.receivedChunks),
-          socket,
-          startTime: Date.now(),
-          lastActivity: Date.now(),
-          resumedAt: Date.now(),
-          previouslyReceived: persistentUpload.receivedChunks.size,
-        });
-
-        // Confirmer la reprise de l'upload au client
-        socket.emit("upload_resumed", {
-          fileId: metadata.fileId,
-          receivedChunks: Array.from(persistentUpload.receivedChunks),
-          progress: Math.floor(
-            (persistentUpload.receivedChunks.size / metadata.totalChunks) * 100
-          ),
-        });
-      } else {
-        // Initialiser un nouvel upload
-        this.activeUploads.set(metadata.fileId, {
-          ...metadata,
-          buffer: new Array(metadata.totalChunks),
-          receivedChunks: new Set(),
-          socket,
-          startTime: Date.now(),
-          lastActivity: Date.now(),
-          userId: socket.userId || metadata.userId,
-        });
-
-        // Confirmer le début de l'upload au client
-        socket.emit("upload_started", { fileId: metadata.fileId });
-      }
-    } catch (error) {
-      console.error("Erreur lors du démarrage de l'upload:", error);
-      socket.emit("upload_error", {
-        fileId: metadata?.fileId,
-        error: "Erreur interne",
-        code: "INTERNAL_ERROR",
-      });
-    }
-  }
-
-  /**
-   * Met en pause un téléchargement
-   * @param {string} fileId - L'ID du fichier
-   * @param {Socket} socket - L'instance de socket
-   */
-  pauseUpload(fileId, socket) {
-    const upload = this.activeUploads.get(fileId);
-    if (!upload) {
-      return socket.emit("upload_error", {
-        fileId,
-        error: "Upload non trouvé",
-        code: "UPLOAD_NOT_FOUND",
-      });
-    }
-
-    // Sauvegarder l'état actuel pour permettre la reprise
-    if (this.savePersistentUpload(fileId, upload)) {
-      // Marquer comme en pause mais ne pas supprimer les données
-      upload.isPaused = true;
-      upload.pausedAt = Date.now();
-
-      socket.emit("upload_paused", {
-        fileId,
-        receivedChunks: upload.receivedChunks.size,
-        totalChunks: upload.totalChunks,
-        progress: Math.floor(
-          (upload.receivedChunks.size / upload.totalChunks) * 100
-        ),
-      });
-
-      // Libérer la mémoire active mais garder les données persistantes
-      this.activeUploads.delete(fileId);
-    } else {
-      socket.emit("upload_error", {
-        fileId,
-        error: "Impossible de mettre en pause l'upload",
-        code: "PAUSE_ERROR",
-      });
-    }
-  }
-
-  /**
-   * Reprend un téléchargement en pause
-   * @param {string} fileId - L'ID du fichier
-   * @param {Socket} socket - L'instance de socket
-   */
-  resumeUpload(fileId, socket) {
-    // Vérifier si l'upload est déjà actif
-    if (this.activeUploads.has(fileId)) {
-      return socket.emit("upload_error", {
-        fileId,
-        error: "L'upload est déjà actif",
-        code: "ALREADY_ACTIVE",
-      });
-    }
-
-    // Vérifier si l'upload existe dans les uploads persistants
-    const persistentUpload = this.persistentUploads.get(fileId);
-    if (!persistentUpload) {
-      return socket.emit("upload_error", {
-        fileId,
-        error: "Upload non trouvé",
-        code: "UPLOAD_NOT_FOUND",
-      });
-    }
-
-    // Charger les chunks déjà reçus
-    const buffer = this.loadPersistentChunks(
+  createSession(fileId, userId, expectedChunks, totalSize, fileName, mimeType) {
+    const session = {
       fileId,
-      persistentUpload.totalChunks
-    );
-
-    // Réactiver l'upload
-    this.activeUploads.set(fileId, {
-      ...persistentUpload,
-      buffer,
-      receivedChunks: new Set(persistentUpload.receivedChunks),
-      socket,
-      resumedAt: Date.now(),
-      lastActivity: Date.now(),
-      isPaused: false,
-    });
-
-    // Informer le client
-    socket.emit("upload_resumed", {
-      fileId,
-      receivedChunks: Array.from(persistentUpload.receivedChunks),
-      progress: Math.floor(
-        (persistentUpload.receivedChunks.size / persistentUpload.totalChunks) *
-          100
-      ),
-    });
+      userId,
+      expectedChunks,
+      totalSize,
+      fileName,
+      mimeType,
+      receivedChunks: new Set(),
+      chunkData: new Map(),
+      createdAt: new Date(),
+      lastActivity: new Date()
+    };
+    
+    this.sessions.set(fileId, session);
+    return session;
   }
 
-  /**
-   * Gère la réception d'un morceau de fichier
-   * @param {Socket} socket - L'instance de socket
-   * @param {Object} data - Les données du chunk (fileId, index, data)
-   */
-  async handleFileChunk(socket, { fileId, index, data }) {
+  getSession(fileId) {
+    return this.sessions.get(fileId);
+  }
+
+  addChunk(fileId, chunkIndex, chunkData) {
+    const session = this.sessions.get(fileId);
+    if (!session) return false;
+
+    session.receivedChunks.add(chunkIndex);
+    if (chunkData) {
+      session.chunkData.set(chunkIndex, chunkData);
+    }
+    session.lastActivity = new Date();
+    
+    return true;
+  }
+
+  isComplete(fileId) {
+    const session = this.sessions.get(fileId);
+    if (!session) return false;
+    
+    return session.receivedChunks.size === session.expectedChunks;
+  }
+
+  removeSession(fileId) {
+    this.sessions.delete(fileId);
+  }
+
+  startCleanupTimer() {
+    setInterval(() => {
+      this.cleanup();
+    }, 5 * 60 * 1000); // Nettoyer toutes les 5 minutes
+  }
+
+  cleanup() {
+    const now = new Date();
+    const TIMEOUT = 30 * 60 * 1000; // 30 minutes
+
+    for (const [fileId, session] of this.sessions.entries()) {
+      if (now - session.lastActivity > TIMEOUT) {
+        this.removeSession(fileId);
+        // Nettoyer les fichiers temporaires
+        this.cleanupTempFiles(fileId).catch(console.error);
+      }
+    }
+  }
+
+  async cleanupTempFiles(fileId) {
+    const chunkDir = path.join(UPLOAD_DIR, fileId);
     try {
-      const upload = this.activeUploads.get(fileId);
-
-      // Vérifier si l'upload existe
-      if (!upload) {
-        return socket.emit("upload_error", {
-          fileId,
-          error: "Upload non trouvé",
-          code: "UPLOAD_NOT_FOUND",
-        });
-      }
-
-      // Mettre à jour le timestamp d'activité
-      upload.lastActivity = Date.now();
-
-      // Vérifier si le chunk a déjà été reçu
-      if (upload.receivedChunks.has(index)) {
-        return socket.emit("chunk_received", {
-          fileId,
-          index,
-          duplicate: true,
-        });
-      }
-
-      // Ajouter le chunk au buffer
-      upload.buffer[index] = Buffer.from(data);
-      upload.receivedChunks.add(index); //stocke les index des chunks reçus
-
-      // Sauvegarder le chunk sur disque pour permettre la reprise
-      try {
-        const chunkDirPath = path.join(TEMP_UPLOAD_DIR, fileId);
-        if (!fs.existsSync(chunkDirPath)) {
-          fs.mkdirSync(chunkDirPath, { recursive: true });
-        }
-        fs.writeFileSync(
-          path.join(chunkDirPath, `${index}.chunk`),
-          upload.buffer[index]
-        );
-      } catch (err) {
-        console.error(
-          `Erreur lors de la sauvegarde du chunk ${index} pour ${fileId}:`,
-          err
-        );
-      }
-
-      // Envoyer un accusé de réception du chunk
-      socket.emit("chunk_received", { fileId, index });
-
-      // Sauvegarder périodiquement les métadonnées
-      if (upload.receivedChunks.size % 10 === 0) {
-        this.savePersistentUpload(fileId, upload);
-      }
-
-      // Vérifier si l'upload est complet
-      if (upload.receivedChunks.size === upload.totalChunks) {
-        await this.finalizeUpload(fileId, socket);
-      } else {
-        this.reportProgress(fileId, socket, upload);
-      }
+      await fs.remove(chunkDir);
+      console.log(`Cleaned up temp files for ${fileId}`);
     } catch (error) {
-      console.error("Erreur lors de la réception du chunk:", error);
-      socket.emit("upload_error", {
-        fileId,
-        error: "Erreur lors du traitement du chunk",
-        code: "CHUNK_PROCESSING_ERROR",
-      });
+      console.error(`Failed to cleanup temp files for ${fileId}:`, error);
     }
   }
 
-  /**
-   * Rapporte la progression du téléchargement au client
-   * @param {string} fileId - L'ID du fichier
-   * @param {Socket} socket - L'instance de socket
-   * @param {Object} upload - Les données d'upload
-   */
-  reportProgress(fileId, socket, upload) {
-    // Optimisation: rapporter la progression à intervalles réguliers
-    if (
-      upload.receivedChunks.size % PROGRESS_REPORT_INTERVAL === 0 ||
-      upload.receivedChunks.size === Math.floor(upload.totalChunks / 2)
-    ) {
-      const progress = Math.floor(
-        (upload.receivedChunks.size / upload.totalChunks) * 100
-      );
 
-      socket.emit("upload_progress", {
-        fileId,
-        received: upload.receivedChunks.size,
-        total: upload.totalChunks,
-        progress,
-        elapsedTime: Date.now() - upload.startTime,
-      });
-    }
+  // Nouveau: Marquer un fichier comme terminé avec succès
+  markFileCompleted(fileId, filePath) {
+    this.completedFiles.set(fileId, {
+      path: filePath,
+      completedAt: new Date(),
+      fileId: fileId
+    });
+    console.log(`File marked as completed: ${fileId} at ${filePath}`);
   }
 
-  /**
-   * Finalise le téléchargement et traite le fichier
-   * @param {string} fileId - L'ID du fichier
-   * @param {Socket} socket - L'instance de socket
-   */
-  async finalizeUpload(fileId, socket) {
-    const upload = this.activeUploads.get(fileId);
-    if (!upload) return;
+  
+  startAdvancedCleanup() {
+    // Timer 1: Nettoyer les fichiers terminés toutes les heures
+    setInterval(() => {
+      this.cleanupCompletedFiles();
+    }, 60 * 60 * 1000); // 1 heure
 
-    try {
-      // Traiter le média
-      const fileUploadedData = await handleMediaUpload(socket, {
-        fileName: upload.fileName,
-        mimeType: upload.mimeType,
-        buffer: upload.buffer,
-        mediaDuration: upload.mediaDuration,
-      });
+    // Timer 2: Nettoyer tous les fichiers obsolètes toutes les 4 heures  
+    setInterval(() => {
+      this.cleanupAllObsoleteFiles();
+    }, 4 * 60 * 60 * 1000); // 4 heures
 
-      // Stocker les données du fichier uploadé pour référence future
-      const uploadResult = {
-        fileId,
-        fileName: upload.fileName,
-        mediaPath: fileUploadedData.mediaPath,
-        mediaSize: fileUploadedData.mediaSize,
-        mediaDuration: fileUploadedData.mediaDuration,
-        uploadTime: Date.now() - upload.startTime,
-        completedAt: new Date(),
-      };
-
-      //ajouter le resultat dans activeUploads
-     // Object.assign(upload, uploadResult); //très important car j'ai besoin d'un getter pour récupérer ces informations utiles
-
-      // Confirmer que l'upload est terminé
-      socket.emit(`upload_complete:${fileId}`, {
-        ...uploadResult,
-        processingTime: uploadResult.uploadTime,
-      });
-
-      /*  // Supprimer les données persistantes
-      this.removePersistentUpload(fileId);
-
-      // Libérer la mémoire
-      this.activeUploads.delete(fileId); */
-
-      return uploadResult;
-    } catch (error) {
-      console.error("Erreur lors du traitement du fichier:", error);
-      socket.emit("upload_error", {
-        fileId,
-        error: error.message,
-        code: error.code || "PROCESSING_ERROR",
-      });
-
-      // Ne pas supprimer les données persistantes en cas d'erreur
-      // pour permettre une nouvelle tentative
-
-      // Libérer la mémoire active
-      this.activeUploads.delete(fileId);
-      return null;
-    }
+    console.log('Advanced cleanup timers started');
   }
 
-  /**
-   * Annule un téléchargement en cours
-   * @param {string} fileId - L'ID du fichier à annuler
-   * @param {Socket} socket - L'instance de socket
-   */
-  cancelUpload(fileId, socket) {
-    if (this.activeUploads.has(fileId) || this.persistentUploads.has(fileId)) {
-      // Supprimer les données persistantes
-      this.removePersistentUpload(fileId);
+   // Nettoyage des fichiers terminés depuis 1h+
+  async cleanupCompletedFiles() {
+    const now = new Date();
+    const ONE_HOUR = 60 * 60 * 1000;
+    let cleanedCount = 0;
 
-      // Supprimer de la mémoire active
-      this.activeUploads.delete(fileId);
-
-      socket.emit("upload_cancelled", { fileId });
-    } else {
-      socket.emit("upload_error", {
-        fileId,
-        error: "Upload non trouvé",
-        code: "UPLOAD_NOT_FOUND",
-      });
-    }
-  }
-
-  /**
-   * Gère la déconnexion d'un socket
-   * @param {Socket} socket - L'instance de socket déconnectée
-   */
-  handleDisconnect(socket) {
-    // Mettre en pause tous les uploads actifs de ce socket
-    for (const [fileId, upload] of this.activeUploads.entries()) {
-      if (upload.socket.id === socket.id) {
-        // Sauvegarder l'état pour permettre la reprise
-        this.savePersistentUpload(fileId, upload);
-
-        // Libérer la mémoire active
-        this.activeUploads.delete(fileId);
-      }
-    }
-  }
-
-  /**
-   * Nettoie les uploads inactifs
-   */
-  cleanupStaleUploads() {
-    const now = Date.now();
-
-    // Nettoyer les uploads actifs inactifs
-    for (const [fileId, upload] of this.activeUploads.entries()) {
-      if (now - upload.lastActivity > CHUNK_TIMEOUT) {
+    console.log('Starting cleanup of completed files (1h+)...');
+    
+    for (const [fileId, fileInfo] of this.completedFiles.entries()) {
+      const fileAge = now - fileInfo.completedAt;
+      
+      if (fileAge > ONE_HOUR) {
         try {
-          // Sauvegarder l'état pour permettre la reprise
-          this.savePersistentUpload(fileId, upload);
-
-          upload.socket.emit("upload_paused", {
-            fileId,
-            receivedChunks: upload.receivedChunks.size,
-            totalChunks: upload.totalChunks,
-            progress: Math.floor(
-              (upload.receivedChunks.size / upload.totalChunks) * 100
-            ),
-            reason: "INACTIVITY",
-          });
-        } catch (e) {
-          // Le socket peut être déjà déconnecté
+          // Supprimer le fichier du système
+          if (fileInfo.path && await fs.pathExists(fileInfo.path)) {
+            await fs.remove(fileInfo.path);
+            console.log(`Deleted completed file: ${fileInfo.path}`);
+          }
+          
+          // Supprimer de la mémoire
+          this.completedFiles.delete(fileId);
+          
+          // Supprimer dossier temp si existe encore
+          await this.cleanupTempFiles(fileId);
+          
+          cleanedCount++;
+          
+        } catch (error) {
+          console.error(`Failed to cleanup completed file ${fileId}:`, error);
         }
-        this.activeUploads.delete(fileId);
+      }
+    } console.log(`Completed files cleanup: ${cleanedCount} files removed`);
+  }
+   // Nettoyage de tous les fichiers obsolètes depuis 4h+
+  async cleanupAllObsoleteFiles() {
+    const now = new Date();
+    const FOUR_HOURS = 4 * 60 * 60 * 1000;
+    let cleanedSessions = 0;
+    let cleanedFiles = 0;
+    let cleanedDirs = 0;
+
+    console.log('Starting cleanup of all obsolete files (4h+)...');
+
+    // 1. Nettoyer les sessions actives obsolètes (annulées, en attente, etc.)
+    for (const [fileId, session] of this.sessions.entries()) {
+      const sessionAge = now - session.createdAt;
+      
+      if (sessionAge > FOUR_HOURS) {
+        try {
+          await this.cleanupTempFiles(fileId);
+          this.removeSession(fileId);
+          cleanedSessions++;
+          console.log(`Cleaned obsolete session: ${fileId}`);
+        } catch (error) {
+          console.error(`Failed to cleanup session ${fileId}:`, error);
+        }
       }
     }
 
-    // Nettoyer les uploads persistants très anciens (7 jours)
-    const ONE_WEEK = 7 * 24 * 60 * 60 * 1000;
-    for (const [fileId, upload] of this.persistentUploads.entries()) {
-      if (now - upload.lastActivity > ONE_WEEK) {
-        this.removePersistentUpload(fileId);
+    // 2. Nettoyer les fichiers terminés obsolètes
+    for (const [fileId, fileInfo] of this.completedFiles.entries()) {
+      const fileAge = now - fileInfo.completedAt;
+      
+      if (fileAge > FOUR_HOURS) {
+        try {
+          if (fileInfo.path && await fs.pathExists(fileInfo.path)) {
+            await fs.remove(fileInfo.path);
+          }
+          this.completedFiles.delete(fileId);
+          await this.cleanupTempFiles(fileId);
+          cleanedFiles++;
+          console.log(`Cleaned obsolete completed file: ${fileId}`);
+        } catch (error) {
+          console.error(`Failed to cleanup obsolete file ${fileId}:`, error);
+        }
       }
     }
+
+    // 3. Nettoyer les dossiers orphelins
+    cleanedDirs = await this.cleanupOrphanDirectories(FOUR_HOURS);
+
+    console.log(`All obsolete files cleanup: ${cleanedSessions} sessions, ${cleanedFiles} files, ${cleanedDirs} directories removed`);
   }
+ // Nettoyer les dossiers orphelins dans UPLOAD_DIR
+  async cleanupOrphanDirectories(maxAge) {
+    let cleanedCount = 0;
+    
+    try {
+      if (!await fs.pathExists(UPLOAD_DIR)) {
+        return cleanedCount;
+      }
 
-  /**
-   * Vérifie si un upload est toujours actif
-   * @param {string} fileId - L'ID du fichier
-   * @returns {boolean} - Vrai si l'upload est actif
-   */
-  isUploadActive(fileId) {
-    return this.activeUploads.has(fileId);
-  }
-
-  /**
-   * Vérifie si un upload est en pause
-   * @param {string} fileId - L'ID du fichier
-   * @returns {boolean} - Vrai si l'upload est en pause
-   */
-  isUploadPaused(fileId) {
-    return (
-      this.persistentUploads.has(fileId) && !this.activeUploads.has(fileId)
-    );
-  }
-
-  /**
-   * Récupère des informations sur un upload en cours
-   * @param {string} fileId - L'ID du fichier
-   * @returns {Object|null} - Les informations de l'upload ou null
-   */
-  getUploadInfo(fileId, metadata) {
-    const upload = this.activeUploads.get(fileId);
-    if (upload) {
-      return {
-        fileId,
-        fileName: upload.fileName,
-        mimeType: upload.mimeType,
-        progress: Math.floor(
-          (upload.receivedChunks.size / upload.totalChunks) * 100
-        ),
-        mediaPath: upload.mediaPath,
-        mediaSize: upload.mediaSize,
-        mediaDuration: upload.mediaDuration,
-        startTime: upload.startTime,
-        elapsedTime: Date.now() - upload.startTime,
-        lastActivity: upload.lastActivity,
-        receivedChunks: upload.receivedChunks.size,
-        totalChunks: upload.totalChunks,
-        isPaused: false,
-        completedAt: upload.completedAt,
-        resumedAt: upload.resumedAt,
-        ...metadata,
-      };
-    }
-
-/*     // Vérifier les uploads en pause
-    const pausedUpload = this.persistentUploads.get(fileId);
-    if (pausedUpload) {
-      return {
-        fileId,
-        fileName: pausedUpload.fileName,
-        mimeType: pausedUpload.mimeType,
-        progress: Math.floor(
-          (pausedUpload.receivedChunks.size / pausedUpload.totalChunks) * 100
-        ),
-        lastActivity: pausedUpload.lastActivity,
-        receivedChunks: pausedUpload.receivedChunks.size,
-        totalChunks: pausedUpload.totalChunks,
-        isPaused: true,
-        ...metadata,
-      };
+      const items = await fs.readdir(UPLOAD_DIR);
+      
+      for (const item of items) {
+        const itemPath = path.join(UPLOAD_DIR, item);
+        
+        try {
+          const stats = await fs.stat(itemPath);
+          
+          if (stats.isDirectory()) {
+            const isTracked = this.sessions.has(item) || this.completedFiles.has(item);
+            const itemAge = Date.now() - stats.mtime.getTime();
+            
+            // Supprimer si pas suivi ET trop vieux
+            if (!isTracked && itemAge > maxAge) {
+              await fs.remove(itemPath);
+              cleanedCount++;
+              console.log(`Removed orphan directory: ${itemPath}`);
+            }
+          }
+        } catch (error) {
+          console.error(`Error processing ${itemPath}:`, error);
+        }
+      }
+    } catch (error) {
+      console.error('Error during orphan cleanup:', error);
     }
     
-    if (Object.keys(metadata).length > 0) {
-      return {
-        fileId,
-        ...metadata,
-      };
-    } */
+    return cleanedCount;
+  }
+ // Amélioration de la méthode existante cleanupTempFiles
+  async cleanupTempFiles(fileId) {
+    const chunkDir = path.join(UPLOAD_DIR, fileId);
+    try {
+      if (await fs.pathExists(chunkDir)) {
+        await fs.remove(chunkDir);
+        console.log(`Cleaned temp files for: ${fileId}`);
+      }
+    } catch (error) {
+      console.error(`Failed to cleanup temp files for ${fileId}:`, error);
+    }
+  }
+  // Statistiques pour monitoring
+  getCleanupStats() {
+    const now = new Date();
+    const ONE_HOUR = 60 * 60 * 1000;
+    const FOUR_HOURS = 4 * 60 * 60 * 1000;
 
-    return null;
+    let completedReadyForCleanup = 0;
+    let sessionsReadyForCleanup = 0;
+
+    // Compter les fichiers terminés prêts pour nettoyage (1h+)
+    for (const [, fileInfo] of this.completedFiles.entries()) {
+      if (now - fileInfo.completedAt > ONE_HOUR) {
+        completedReadyForCleanup++;
+      }
+    }
+
+    // Compter les sessions prêtes pour nettoyage (4h+)
+    for (const [, session] of this.sessions.entries()) {
+      if (now - session.createdAt > FOUR_HOURS) {
+        sessionsReadyForCleanup++;
+      }
+    }
+
+    return {
+      activeSessions: this.sessions.size,
+      completedFiles: this.completedFiles.size,
+      completedReadyForCleanup,
+      sessionsReadyForCleanup,
+      totalTracked: this.sessions.size + this.completedFiles.size
+    };
+  }
+
+  addChunk(fileId, chunkIndex, chunkData) {
+    const session = this.sessions.get(fileId);
+    if (!session) return false;
+
+    session.receivedChunks.add(chunkIndex);
+    if (chunkData) {
+      session.chunkData.set(chunkIndex, chunkData);
+    }
+    session.lastActivity = new Date();
+    
+    return true;
+  }
+
+  isComplete(fileId) {
+    const session = this.sessions.get(fileId);
+    if (!session) return false;
+    
+    return session.receivedChunks.size === session.expectedChunks;
+  }
+
+  removeSession(fileId) {
+    this.sessions.delete(fileId);
+  }
+
+  // Timer existant - garder tel quel
+  startCleanupTimer() {
+    setInterval(() => {
+      this.cleanup();
+    }, 5 * 60 * 1000); // 5 minutes
+  }
+  // Méthode existante - garder tel quel
+  cleanup() {
+    const now = new Date();
+    const TIMEOUT = 30 * 60 * 1000; // 30 minutes
+
+    for (const [fileId, session] of this.sessions.entries()) {
+      if (now - session.lastActivity > TIMEOUT) {
+        this.removeSession(fileId);
+        this.cleanupTempFiles(fileId).catch(console.error);
+      }
+    }
   }
 }
 
-export default UploadService;
+// Instance globale du gestionnaire d'upload
+const uploadManager = new UploadManager();
+
+// Fonctions de cryptographie
+function decryptChunk(encryptedData, encryptionKey) {
+  try {
+    // Créer la clé de 32 bytes à partir de la clé fournie
+    const key = Buffer.from(encryptionKey.padEnd(32, '\0').slice(0, 32), 'utf8');
+    
+    // IV de 16 bytes (correspond à l'implémentation Flutter)
+    const iv = Buffer.alloc(16, 0);
+    
+    const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
+    decipher.setAutoPadding(true);
+    
+    const decrypted = Buffer.concat([
+      decipher.update(encryptedData),
+      decipher.final()
+    ]);
+    
+    return decrypted;
+  } catch (error) {
+    throw new Error(`Decryption failed: ${error.message}`);
+  }
+}
+
+function decompressChunk(compressedData) {
+  try {
+    return zlib.inflateSync(compressedData);
+  } catch (error) {
+    throw new Error(`Decompression failed: ${error.message}`);
+  }
+}
+
+function calculateHash(data) {
+  return crypto.createHash('sha256').update(data).digest('hex');
+}
+
+// Validation des inputs
+function validateChunkInput(data) {
+  const required = ['index', 'fileId', 'data', 'userId', 'size', 'hash'];
+  
+  for (const field of required) {
+    if (!(field in data)) {
+      throw new Error(`Missing required field: ${field}`);
+    }
+  }
+
+  // Validation des types
+  if (typeof data.index !== 'number' || data.index < 0) {
+    throw new Error('Invalid chunk index');
+  }
+
+  if (typeof data.size !== 'number' || data.size <= 0 || data.size > MAX_CHUNK_SIZE) {
+    throw new Error('Invalid chunk size');
+  }
+
+  if (typeof data.fileId !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(data.fileId)) {
+    throw new Error('Invalid fileId format');
+  }
+
+  if (typeof data.userId !== 'string' || data.userId.length === 0) {
+    throw new Error('Invalid userId');
+  }
+
+  if (typeof data.hash !== 'string' || !/^[a-f0-9]{64}$/.test(data.hash)) {
+    throw new Error('Invalid hash format');
+  }
+
+  return true;
+}
+
+// Fonction pour obtenir le statut d'une session
+async function getSessionStatus(fileId) {
+  const session = uploadManager.getSession(fileId);
+
+  if (!session) {
+    throw new Error('Upload session not found');
+  }
+
+  // Vérifier quels chunks existent déjà sur le disque
+  const chunkDir = path.join(UPLOAD_DIR, fileId);
+  const existingChunks = [];
+  
+  try {
+    if (await fs.pathExists(chunkDir)) {
+      const files = await fs.readdir(chunkDir);
+      for (const file of files) {
+        const match = file.match(/^chunk_(\d+)$/);
+        if (match) {
+          existingChunks.push(parseInt(match[1]));
+        }
+      }
+    }
+  } catch (error) {
+    console.error('Error checking existing chunks:', error);
+    throw new Error('Error checking existing chunks');
+  }
+
+  return {
+    fileId,
+    expectedChunks: session.expectedChunks,
+    receivedChunks: Array.from(session.receivedChunks),
+    existingChunks: existingChunks.sort((a, b) => a - b),
+    isComplete: uploadManager.isComplete(fileId),
+    totalSize: session.totalSize
+  };
+}
+
+// Fonction pour reconstruire le fichier final
+async function reconstructFile(fileId, session) {
+  const chunkDir = path.join(UPLOAD_DIR, fileId);
+  const chunks = [];
+  
+  // Lire tous les chunks dans l'ordre
+  for (let i = 0; i < session.expectedChunks; i++) {
+    const chunkPath = path.join(chunkDir, `chunk_${i}`);
+    
+    if (!await fs.pathExists(chunkPath)) {
+      throw new Error(`Missing chunk ${i}`);
+    }
+    
+    const chunkData = await fs.readFile(chunkPath);
+    chunks.push(chunkData);
+  }
+  
+  // Concaténer tous les chunks
+  return Buffer.concat(chunks);
+}
+
+
+// Fonction principale pour configurer les événements Socket.IO
+export const mediaUploader = async (socket) => {
+  // Initialisation d'une session d'upload
+  socket.on('upload_init', async (data) => {
+    try {
+      const { fileId, userId, expectedChunks, totalSize, fileName, mimeType } = data;
+      
+      // Validation
+      if (!fileId || !userId || !expectedChunks || !totalSize) {
+        socket.emit('upload_error', { 
+          fileId, 
+          error: 'Missing required fields for upload initialization' 
+        });
+        return;
+      }
+
+      if (totalSize > MAX_FILE_SIZE) {
+        socket.emit('upload_error', { 
+          fileId, 
+          error: 'File size exceeds maximum allowed size' 
+        });
+        return;
+      }
+
+      // Créer la session
+      uploadManager.createSession(fileId, userId, expectedChunks, totalSize, fileName, mimeType);
+      
+      // Créer le dossier pour les chunks
+      const chunkDir = path.join(UPLOAD_DIR, fileId);
+      await fs.ensureDir(chunkDir);
+
+
+      // Vérifier les chunks déjà présents
+      const existingChunks = [];
+      try {
+        const files = await fs.readdir(chunkDir);
+        for (const file of files) {
+          const match = file.match(/^chunk_(\d+)$/);
+          if (match) {
+            const chunkIndex = parseInt(match[1]);
+            existingChunks.push(chunkIndex);
+            uploadManager.addChunk(fileId, chunkIndex, null); // Marquer comme reçu
+          }
+        }
+      } catch (error) {
+        console.error('Error checking existing chunks:', error);
+      }
+
+      socket.emit('upload_initialized', { 
+        fileId, 
+        existingChunks: existingChunks.sort((a, b) => a - b),
+        message: 'Upload session initialized successfully' 
+      });
+
+    } catch (error) {
+      console.error('Upload init error:', error);
+      socket.emit('upload_error', { 
+        fileId: data.fileId, 
+        error: error.message 
+      });
+    }
+  });
+
+  // Réception d'un chunk
+  socket.on('file_chunk', async (data) => {
+    try {
+      // Validation des inputs
+      validateChunkInput(data);
+      
+      const { index, fileId, data: encodedChunk, userId, size, hash } = data;
+      
+      // Vérifier la session
+      const session = uploadManager.getSession(fileId);
+      if (!session) {
+        socket.emit('chunk_received', {
+          fileId,
+          index,
+          success: false,
+          error: 'No active upload session found'
+        });
+        return;
+      }
+
+      // Vérifier que le chunk n'a pas déjà été reçu
+      if (session.receivedChunks.has(index)) {
+        socket.emit('chunk_received', {
+          fileId,
+          index,
+          success: true,
+          message: 'Chunk already received'
+        });
+        return;
+      }
+
+      // Décoder le chunk
+      const encryptedData = Buffer.from(encodedChunk, 'base64');
+      
+      // Déchiffrer
+      const compressedData = decryptChunk(encryptedData, ENCRYPTION_KEY);
+      
+      // Décompresser
+      const originalData = decompressChunk(compressedData);
+      
+      // Vérifier la taille
+      if (originalData.length !== size) {
+        socket.emit('chunk_received', {
+          fileId,
+          index,
+          success: false,
+          error: `Size mismatch: expected ${size}, got ${originalData.length}`
+        });
+        return;
+      }
+      
+      // Vérifier le hash
+      const calculatedHash = calculateHash(originalData);
+      if (calculatedHash !== hash) {
+        socket.emit('chunk_received', {
+          fileId,
+          index,
+          success: false,
+          error: 'Hash verification failed'
+        });
+        return;
+      }
+      
+      // Sauvegarder le chunk
+      const chunkPath = path.join(UPLOAD_DIR, fileId, `chunk_${index}`);
+      await fs.writeFile(chunkPath, originalData);
+      
+      // Marquer le chunk comme reçu
+      uploadManager.addChunk(fileId, index, originalData);
+      
+      // Répondre au client
+      socket.emit('chunk_received', {
+        fileId,
+        index,
+        success: true
+      });
+
+      // Vérifier si l'upload est terminé
+      if (uploadManager.isComplete(fileId)) {
+        console.log(`Upload completed for file: ${fileId}`);
+        
+        try {
+          const finalBuffer = await reconstructFile(fileId, session);
+          
+          // Ici vous pouvez intégrer votre fonction handleMediaUpload
+          const mediaResult = await handleMediaUpload(socket, {
+            buffer: [finalBuffer], // Format attendu par votre fonction
+            fileName: session.fileName || `${fileId}.bin`,
+            mimeType: session.mimeType || 'application/octet-stream',
+            mediaDuration: data.mediaDuration || null
+          });
+
+          if (mediaResult && mediaResult.filePath) {
+            uploadManager.markFileCompleted(fileId, mediaResult.filePath);
+          }
+          socket.emit('upload_complete', {
+            fileId,
+            success: true,
+            result: mediaResult
+          });
+
+          // Nettoyer
+          await uploadManager.cleanupTempFiles(fileId);
+          uploadManager.removeSession(fileId);
+
+        } catch (error) {
+          console.error('File reconstruction/upload error:', error);
+          socket.emit('upload_complete', {
+            fileId,
+            success: false,
+            error: error.message
+          });
+        }
+      }
+
+    } catch (error) {
+      console.error('Chunk processing error:', error);
+      socket.emit('chunk_received', {
+        fileId: data.fileId,
+        index: data.index,
+        success: false,
+        error: error.message
+      });
+    }
+  });
+
+  // Obtenir le statut d'une session
+  socket.on('get_upload_status', async (data) => {
+    try {
+      const { fileId } = data;
+      const status = await getSessionStatus(fileId);
+      socket.emit('upload_status', status);
+    } catch (error) {
+      socket.emit('upload_error', {
+        fileId: data.fileId,
+        error: error.message
+      });
+    }
+  });
+
+  // Annuler un upload
+  socket.on('cancel_upload', async (data) => {
+    try {
+      const { fileId } = data;
+      await uploadManager.cleanupTempFiles(fileId);
+      uploadManager.removeSession(fileId);
+      socket.emit('upload_cancelled', { fileId });
+    } catch (error) {
+      socket.emit('upload_error', {
+        fileId: data.fileId,
+        error: error.message
+      });
+    }
+  });
+};

@@ -15,7 +15,7 @@ import { setupRoomSocket } from "./socket/roomHandlers.js";
 import { setupPaymentSocket } from "./controllers/paymentController.js";
 import { refreshUserToken, verifyToken } from "./services/authService.js";
 import { dataParse } from "./utils/validator.js";
-import UploadService from "./config/fileUploader.js";
+import  { mediaUploader } from "./config/fileUploader.js";
 import { configureBusinessSocket } from "./socket/businessHandlers.js";
 import { configureStatusSocket } from "./socket/statusHandlers.js";
 import { markExpiredFileShares } from "./services/fileShareService.js";
@@ -38,7 +38,7 @@ const authEvenNames = [
 const io = new SocketIO(server, {
   pingTimeout: 60000, // 60s sans activité avant déconnexion
   pingInterval: 25000, // Envoi de ping toutes les 25s
-  maxHttpBufferSize: 1e8, // Taille max des messages (100MB)
+  maxHttpBufferSize: 10e6, // Taille max des messages (100MB)
   reconnectionAttempts: 5, // Nombre de tentatives de reconnexion
   reconnectionDelay: 1000, //Delai de reconnexion
   transports: ["websocket"], // Force WebSocket uniquement
@@ -48,7 +48,7 @@ const io = new SocketIO(server, {
   },
 });
 
-global.uploadService = new UploadService(io);
+//global.uploadService = new UploadService(io);
 
 // Connexion à MongoDB
 mongoose
@@ -136,7 +136,7 @@ io.on("connection", async (socket) => {
 
   console.log(`Utilisateur connecté: ${socket.userData._id}`);
   console.log(`Nombre d'utilisateurs connectés: ${global.connectedUsers.size}`);
-  global.uploadService.registerSocketHandlers(socket);
+  //global.uploadService.registerSocketHandlers(socket);
   userHandlers(io, socket);
   //setupSocketHandlers(io); //une fonction permet de gérer les utilitaires des  utilisateurs
   socketMessageHandlers(io, socket); //on doit utiliser variable globale connectedUsers pour gérer les utilisateurs connectés
@@ -147,6 +147,7 @@ io.on("connection", async (socket) => {
   configureStatusSocket(io, socket);
   setupErrorHandlers(socket);
   setupFileShareSocket(socket);
+  mediaUploader(socket);
 });
 
 // Mark expired file shares every hour
