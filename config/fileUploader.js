@@ -600,7 +600,7 @@ export const mediaUploader = async (socket) => {
       buffer: [finalBuffer],
       fileName: session.fileName || `${fileId}.bin`,
       mimeType: session.mimeType || 'application/octet-stream',
-      mediaDuration: mediaResult.mediaDuration || null
+      mediaDuration:  null //A revoir
     });
 
     if (mediaResult && mediaResult.mediaPath) {
