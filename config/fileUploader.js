@@ -70,8 +70,12 @@ class UploadManager {
     return session.receivedChunks.size === session.expectedChunks;
   }
 
-  removeSession(fileId) {
-    this.sessions.delete(fileId);
+ removeSession(fileId) {
+    const session = this.sessions.get(fileId);
+    if (session) {
+      console.log(`Suppression de la session: ${fileId}`);
+      this.sessions.delete(fileId);
+    }
   }
 
   startCleanupTimer() {
@@ -510,73 +514,128 @@ async function reconstructFile(fileId, session) {
 // Fonction principale pour configurer les événements Socket.IO
 export const mediaUploader = async (socket) => {
   // Initialisation d'une session d'upload
-  socket.on('upload_init', async (data) => {
-    try {
-      const { fileId, userId, expectedChunks, totalSize, fileName, mimeType } = data;
-      
-      // Validation
-      if (!fileId || !userId || !expectedChunks || !totalSize) {
-        socket.emit('upload_error', { 
-          fileId, 
-          error: 'Missing required fields for upload initialization' 
-        });
-        return;
-      }
+ socket.on('upload_init', async (data) => {
+  try {
+    const { fileId, userId, expectedChunks, totalSize, fileName, mimeType } = data;
+    
+    // Validation
+    if (!fileId || !userId || !expectedChunks || !totalSize) {
+      socket.emit('upload_error', { 
+        fileId, 
+        error: 'Missing required fields for upload initialization' 
+      });
+      return;
+    }
 
-      if (totalSize > MAX_FILE_SIZE) {
-        socket.emit('upload_error', { 
-          fileId, 
-          error: 'File size exceeds maximum allowed size' 
-        });
-        return;
-      }
+    if (totalSize > MAX_FILE_SIZE) {
+      socket.emit('upload_error', { 
+        fileId, 
+        error: 'File size exceeds maximum allowed size' 
+      });
+      return;
+    }
 
-      // Créer la session
-      uploadManager.createSession(fileId, userId, expectedChunks, totalSize, fileName, mimeType);
-      
-      // Créer le dossier pour les chunks
-      const chunkDir = path.join(UPLOAD_DIR, fileId);
-      await fs.ensureDir(chunkDir);
-
-
-      // Vérifier les chunks déjà présents
-      const existingChunks = [];
-      try {
-        const files = await fs.readdir(chunkDir);
-        for (const file of files) {
-          const match = file.match(/^chunk_(\d+)$/);
-          if (match) {
-            const chunkIndex = parseInt(match[1]);
-            existingChunks.push(chunkIndex);
-            uploadManager.addChunk(fileId, chunkIndex, null); // Marquer comme reçu
-          }
-        }
-      } catch (error) {
-        console.error('Error checking existing chunks:', error);
-      }
-
+    // NOUVEAU: Vérifier si le fichier a déjà été complété
+    const completedFile = uploadManager.completedFiles.get(fileId);
+    if (completedFile) {
+      console.log(`Fichier déjà complété lors de l'init: ${fileId}`);
       socket.emit('upload_initialized', { 
         fileId, 
-        existingChunks: existingChunks.sort((a, b) => a - b),
-        message: 'Upload session initialized successfully' 
+        existingChunks: Array.from({length: expectedChunks}, (_, i) => i),
+        alreadyCompleted: true,
+        message: 'File already completed' 
       });
-
-    } catch (error) {
-      console.error('Upload init error:', error);
-      socket.emit('upload_error', { 
-        fileId: data.fileId, 
-        error: error.message 
-      });
+      return;
     }
-  });
 
-  // Réception d'un chunk
+    // Vérifier si une session existe déjà
+    let session = uploadManager.getSession(fileId);
+    if (session) {
+      console.log(`Session existante trouvée pour: ${fileId}`);
+    } else {
+      // Créer nouvelle session
+      session = uploadManager.createSession(fileId, userId, expectedChunks, totalSize, fileName, mimeType);
+    }
+    
+    // Créer le dossier pour les chunks
+    const chunkDir = path.join(UPLOAD_DIR, fileId);
+    await fs.ensureDir(chunkDir);
+
+    // Vérifier les chunks déjà présents
+    const existingChunks = [];
+    try {
+      const files = await fs.readdir(chunkDir);
+      for (const file of files) {
+        const match = file.match(/^chunk_(\d+)$/);
+        if (match) {
+          const chunkIndex = parseInt(match[1]);
+          existingChunks.push(chunkIndex);
+          uploadManager.addChunk(fileId, chunkIndex, null);
+        }
+      }
+    } catch (error) {
+      console.error('Error checking existing chunks:', error);
+    }
+
+    socket.emit('upload_initialized', { 
+      fileId, 
+      existingChunks: existingChunks.sort((a, b) => a - b),
+      message: 'Upload session initialized successfully' 
+    });
+
+  } catch (error) {
+    console.error('Upload init error:', error);
+    socket.emit('upload_error', { 
+      fileId: data.fileId, 
+      error: error.message 
+    });
+  }
+});
+
+  async function handleUploadCompletion(socket, fileId, session) {
+  try {
+    const finalBuffer = await reconstructFile(fileId, session);
+    
+    const mediaResult = await handleMediaUpload(socket, {
+      buffer: [finalBuffer],
+      fileName: session.fileName || `${fileId}.bin`,
+      mimeType: session.mimeType || 'application/octet-stream',
+      mediaDuration: data.mediaDuration || null
+    });
+
+    if (mediaResult && mediaResult.filePath) {
+      uploadManager.markFileCompleted(fileId, mediaResult.filePath);
+    }
+    
+    socket.emit('upload_complete', {
+      fileId,
+      success: true,
+      result: mediaResult
+    });
+
+    // SOLUTION 4: Délayer la suppression de la session
+    setTimeout(async () => {
+      await uploadManager.cleanupTempFiles(fileId);
+      uploadManager.removeSession(fileId);
+      console.log(`Session ${fileId} supprimée après délai`);
+    }, 30000); // Attendre 30 secondes avant de supprimer
+
+  } catch (error) {
+    console.error('Erreur de reconstruction/upload:', error);
+    socket.emit('upload_complete', {
+      fileId,
+      success: false,
+      error: error.message
+    });
+  }
+}
+
+
+// 1. Améliorer la gestion des chunks déjà reçus
 socket.on('file_chunk', async (data) => {
   try {
     console.log(`\n=== Traitement du chunk ${data.index} ===`);
     console.log(`FileId: ${data.fileId}`);
-    console.log(`Taille attendue: ${data.size}`);
-    console.log(`Hash attendu: ${data.hash}`);
     
     // Validation des inputs
     validateChunkInput(data);
@@ -587,11 +646,35 @@ socket.on('file_chunk', async (data) => {
     const session = uploadManager.getSession(fileId);
     if (!session) {
       console.log(`Session non trouvée pour fileId: ${fileId}`);
+      
+      // SOLUTION 1: Vérifier si le fichier a déjà été complété
+      const completedFile = uploadManager.completedFiles.get(fileId);
+      if (completedFile) {
+        console.log(`Fichier déjà complété: ${fileId}`);
+        socket.emit('chunk_received', {
+          fileId,
+          index,
+          success: true,
+          message: 'File already completed',
+          alreadyCompleted: true
+        });
+        
+        // Envoyer aussi upload_complete pour informer le client
+        socket.emit('upload_complete', {
+          fileId,
+          success: true,
+          message: 'File was already uploaded',
+          alreadyCompleted: true
+        });
+        return;
+      }
+      
+      // Si vraiment aucune session trouvée
       socket.emit('chunk_received', {
         fileId,
         index,
         success: false,
-        error: 'No active upload session found'
+        error: 'No active upload session found. Please reinitialize upload.'
       });
       return;
     }
@@ -605,10 +688,42 @@ socket.on('file_chunk', async (data) => {
         success: true,
         message: 'Chunk already received'
       });
+      
+      // SOLUTION 2: Vérifier si l'upload est déjà terminé
+      if (uploadManager.isComplete(fileId)) {
+        socket.emit('upload_complete', {
+          fileId,
+          success: true,
+          message: 'Upload already completed'
+        });
+      }
       return;
     }
 
-    // Décoder le chunk
+    // Vérifier si le chunk existe déjà sur le disque
+    const chunkPath = path.join(UPLOAD_DIR, fileId, `chunk_${index}`);
+    if (await fs.pathExists(chunkPath)) {
+      console.log(`Chunk ${index} existe déjà sur le disque`);
+      
+      // Marquer comme reçu si pas déjà fait
+      uploadManager.addChunk(fileId, index, null);
+      
+      socket.emit('chunk_received', {
+        fileId,
+        index,
+        success: true,
+        message: 'Chunk already exists on disk'
+      });
+      
+      // Vérifier si l'upload est terminé
+      if (uploadManager.isComplete(fileId)) {
+        console.log(`Upload terminé pour le fichier: ${fileId}`);
+        await handleUploadCompletion(socket, fileId, session);
+      }
+      return;
+    }
+
+    // Traitement normal du chunk...
     console.log(`Décodage base64: ${encodedChunk.length} caractères`);
     const encryptedData = Buffer.from(encodedChunk, 'base64');
     console.log(`Données chiffrées: ${encryptedData.length} bytes`);
@@ -645,7 +760,6 @@ socket.on('file_chunk', async (data) => {
     }
     
     // Sauvegarder le chunk
-    const chunkPath = path.join(UPLOAD_DIR, fileId, `chunk_${index}`);
     await fs.writeFile(chunkPath, originalData);
     console.log(`Chunk ${index} sauvegardé: ${chunkPath}`);
     
@@ -664,39 +778,7 @@ socket.on('file_chunk', async (data) => {
     // Vérifier si l'upload est terminé
     if (uploadManager.isComplete(fileId)) {
       console.log(`Upload terminé pour le fichier: ${fileId}`);
-      
-      try {
-        const finalBuffer = await reconstructFile(fileId, session);
-        
-        const mediaResult = await handleMediaUpload(socket, {
-          buffer: [finalBuffer],
-          fileName: session.fileName || `${fileId}.bin`,
-          mimeType: session.mimeType || 'application/octet-stream',
-          mediaDuration: data.mediaDuration || null
-        });
-
-        if (mediaResult && mediaResult.filePath) {
-          uploadManager.markFileCompleted(fileId, mediaResult.filePath);
-        }
-        
-        socket.emit('upload_complete', {
-          fileId,
-          success: true,
-          result: mediaResult
-        });
-
-        // Nettoyer
-        await uploadManager.cleanupTempFiles(fileId);
-        uploadManager.removeSession(fileId);
-
-      } catch (error) {
-        console.error('Erreur de reconstruction/upload:', error);
-        socket.emit('upload_complete', {
-          fileId,
-          success: false,
-          error: error.message
-        });
-      }
+      await handleUploadCompletion(socket, fileId, session);
     }
 
   } catch (error) {
@@ -709,6 +791,9 @@ socket.on('file_chunk', async (data) => {
     });
   }
 });
+
+
+
   // Obtenir le statut d'une session
   socket.on('get_upload_status', async (data) => {
     try {
