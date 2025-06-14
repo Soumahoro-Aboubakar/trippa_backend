@@ -600,11 +600,11 @@ export const mediaUploader = async (socket) => {
       buffer: [finalBuffer],
       fileName: session.fileName || `${fileId}.bin`,
       mimeType: session.mimeType || 'application/octet-stream',
-      mediaDuration: data.mediaDuration || null
+      mediaDuration: mediaResult.mediaDuration || null
     });
 
-    if (mediaResult && mediaResult.filePath) {
-      uploadManager.markFileCompleted(fileId, mediaResult.filePath);
+    if (mediaResult && mediaResult.mediaPath) {
+      uploadManager.markFileCompleted(fileId, mediaResult.mediaPath);
     }
     
     socket.emit('upload_complete', {
