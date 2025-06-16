@@ -12,8 +12,8 @@ const __dirname = path.dirname(__filename);
 
 const UPLOAD_DIR = path.join(__dirname, 'uploads');
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || 'u4Vb7x2MTZ3qYpnDfKLaX1gRhPBwEc5s'; // 32 caractères
-const MAX_CHUNK_SIZE = process.env.MAX_CHUNK_SIZE || 2 * 1024 * 1024;     // 2 * 1024 * 1024; // 2MB max par chunk
-const MAX_FILE_SIZE =  process.env.MAX_FILE_SIZE || 100 * 1024 * 1024;    ///100 * 1024 * 1024; // 100MB max par fichier
+const MAX_CHUNK_SIZE = parseInt(process.env.MAX_CHUNK_SIZE) || 2 * 1024 * 1024;     // 2 * 1024 * 1024; // 2MB max par chunk
+const MAX_FILE_SIZE =  parseInt(process.env.MAX_FILE_SIZE) || 100 * 1024 * 1024;    ///100 * 1024 * 1024; // 100MB max par fichier
 
 // Assurer que le dossier uploads existe
 await fs.ensureDir(UPLOAD_DIR);
@@ -23,7 +23,6 @@ class UploadManager {
   constructor() {
     this.sessions = new Map();
     // Démarrer le nettoyage automatique
-    this.startCleanupTimer();//5 min
     this.startAdvancedCleanup();
         this.completedFiles = new Map(); // Tracker les fichiers terminés
   }
@@ -78,13 +77,8 @@ class UploadManager {
     }
   }
 
-  startCleanupTimer() {
-    setInterval(() => {
-      this.cleanup();
-    }, 5 * 60 * 1000); // Nettoyer toutes les 5 minutes
-  }
 
-  cleanup() {
+ /* cleanup() {
     const now = new Date();
     const TIMEOUT = 30 * 60 * 1000; // 30 minutes
 
@@ -95,21 +89,11 @@ class UploadManager {
         this.cleanupTempFiles(fileId).catch(console.error);
       }
     }
-  }
-
-  async cleanupTempFiles(fileId) {
-    const chunkDir = path.join(UPLOAD_DIR, fileId);
-    try {
-      await fs.remove(chunkDir);
-      console.log(`Cleaned up temp files for ${fileId}`);
-    } catch (error) {
-      console.error(`Failed to cleanup temp files for ${fileId}:`, error);
-    }
-  }
+  }*/
 
 
   // Nouveau: Marquer un fichier comme terminé avec succès
-  markFileCompleted(fileId, filePath) {
+  markFileCompleted(fileId, filePath) { // le path ici est en rapport avec l'ur du fichier ici tous reussi (backbaze)
     this.completedFiles.set(fileId, {
       path: filePath,
       completedAt: new Date(),
@@ -117,6 +101,8 @@ class UploadManager {
     });
     console.log(`File marked as completed: ${fileId} at ${filePath}`);
   }
+
+
 
   
   startAdvancedCleanup() {
@@ -154,9 +140,9 @@ class UploadManager {
           
           // Supprimer de la mémoire
           this.completedFiles.delete(fileId);
-          
+          this.removeSession(fileId);
           // Supprimer dossier temp si existe encore
-          await this.cleanupTempFiles(fileId);
+          await this.cleanupTempFiles(fileId); //A revoir  car ici la section n'est pas éffacer
           
           cleanedCount++;
           
@@ -298,48 +284,8 @@ class UploadManager {
     };
   }
 
-  addChunk(fileId, chunkIndex, chunkData) {
-    const session = this.sessions.get(fileId);
-    if (!session) return false;
 
-    session.receivedChunks.add(chunkIndex);
-    if (chunkData) {
-      session.chunkData.set(chunkIndex, chunkData);
-    }
-    session.lastActivity = new Date();
-    
-    return true;
-  }
 
-  isComplete(fileId) {
-    const session = this.sessions.get(fileId);
-    if (!session) return false;
-    
-    return session.receivedChunks.size === session.expectedChunks;
-  }
-
-  removeSession(fileId) {
-    this.sessions.delete(fileId);
-  }
-
-  // Timer existant - garder tel quel
-  startCleanupTimer() {
-    setInterval(() => {
-      this.cleanup();
-    }, 5 * 60 * 1000); // 5 minutes
-  }
-  // Méthode existante - garder tel quel
-  cleanup() {
-    const now = new Date();
-    const TIMEOUT = 30 * 60 * 1000; // 30 minutes
-
-    for (const [fileId, session] of this.sessions.entries()) {
-      if (now - session.lastActivity > TIMEOUT) {
-        this.removeSession(fileId);
-        this.cleanupTempFiles(fileId).catch(console.error);
-      }
-    }
-  }
 }
 
 // Instance globale du gestionnaire d'upload
@@ -541,6 +487,8 @@ export const mediaUploader = async (socket) => {
       console.log(`Fichier déjà complété lors de l'init: ${fileId}`);
       socket.emit('upload_initialized', { 
         fileId, 
+        fileUploadedOnBackbazeId : completedFile.mediaPath,
+   //     result : completedFile,
         existingChunks: Array.from({length: expectedChunks}, (_, i) => i),
         alreadyCompleted: true,
         message: 'File already completed' 
@@ -613,13 +561,7 @@ export const mediaUploader = async (socket) => {
       result: mediaResult
     });
 
-    // SOLUTION 4: Délayer la suppression de la session
-    setTimeout(async () => {
-      await uploadManager.cleanupTempFiles(fileId);
-      uploadManager.removeSession(fileId);
-      console.log(`Session ${fileId} supprimée après délai`);
-    }, 30000); // Attendre 30 secondes avant de supprimer
-
+   
   } catch (error) {
     console.error('Erreur de reconstruction/upload:', error);
     socket.emit('upload_complete', {
@@ -641,14 +583,14 @@ socket.on('file_chunk', async (data) => {
     validateChunkInput(data);
     
     const { index, fileId, data: encodedChunk, userId, size, hash } = data;
+      // SOLUTION 1: Vérifier si le fichier a déjà été complété
+      const completedFile = uploadManager.completedFiles.get(fileId);
     
     // Vérifier la session
     const session = uploadManager.getSession(fileId);
     if (!session) {
       console.log(`Session non trouvée pour fileId: ${fileId}`);
       
-      // SOLUTION 1: Vérifier si le fichier a déjà été complété
-      const completedFile = uploadManager.completedFiles.get(fileId);
       if (completedFile) {
         console.log(`Fichier déjà complété: ${fileId}`);
         socket.emit('chunk_received', {
@@ -663,6 +605,7 @@ socket.on('file_chunk', async (data) => {
         socket.emit('upload_complete', {
           fileId,
           success: true,
+          result: completedFile,
           message: 'File was already uploaded',
           alreadyCompleted: true
         });
@@ -693,6 +636,7 @@ socket.on('file_chunk', async (data) => {
       if (uploadManager.isComplete(fileId)) {
         socket.emit('upload_complete', {
           fileId,
+          result: completedFile,
           success: true,
           message: 'Upload already completed'
         });
@@ -799,7 +743,7 @@ socket.on('file_chunk', async (data) => {
     try {
       const { fileId } = data;
       const status = await getSessionStatus(fileId);
-      socket.emit('upload_status', status);
+      socket.emit('upload_status',{ ...status , fileUploadedOnBackbazeId : uploadManager.completedFiles.get(fileId)?.mediaPath || null });
     } catch (error) {
       socket.emit('upload_error', {
         fileId: data.fileId,
@@ -812,8 +756,9 @@ socket.on('file_chunk', async (data) => {
   socket.on('cancel_upload', async (data) => {
     try {
       const { fileId } = data;
-      await uploadManager.cleanupTempFiles(fileId);
-      uploadManager.removeSession(fileId);
+   /*   await uploadManager.cleanupTempFiles(fileId);
+      uploadManager.removeSession(fileId);*/
+      deleteFileCompletely(fileId);
       socket.emit('upload_cancelled', { fileId });
     } catch (error) {
       socket.emit('upload_error', {
@@ -823,3 +768,46 @@ socket.on('file_chunk', async (data) => {
     }
   });
 };
+
+
+async function deleteFileCompletely(fileId) { //permet d'effacer tous fichier, ça particularité est qu'elle sera importable dans n'importe quel fichier de l'app
+  if(!fileId) return;
+  const result = {
+    fileId,
+    success: true,
+    deletedItems: [],
+    timestamp: new Date().toISOString()
+  };
+
+  console.log(`🗑️ SUPPRESSION COMPLÈTE DEMANDÉE pour fileId: ${fileId}`);
+
+  function addError(message, error) {
+    result.success = false;
+    result.deletedItems.push(`${message}: ${error.message}`);
+    console.error(message, error);
+  }
+
+  try {
+    // 1. SUPPRIMER LA SESSION ACTIVE
+    const session = uploadManager.getSession(fileId);
+    if (session) {
+      uploadManager.removeSession(fileId);
+      result.deletedItems.push(`Session active supprimée`);
+      console.log(`✅ Session supprimée: ${fileId}`);
+    } else {
+      result.deletedItems.push(`Aucune session active trouvée`);
+    }
+
+    // 2. SUPPRIMER LE FICHIER COMPLÉTÉ DE LA MÉMOIRE
+    uploadManager.cleanupTempFiles(fileId);
+    const completedFile = uploadManager.completedFiles.get(fileId);
+    if (completedFile) 
+       uploadManager.completedFiles.delete(fileId);
+    return result;
+  } catch (error) {
+    addError("Erreur globale lors de la suppression complète", error);
+    return result;
+  }
+}
+
+export { deleteFileCompletely };
