@@ -54,7 +54,7 @@ export default function userHandlers(io, socket) {
   });
 
   socket.on("update_user_profile", async (dataToUpdate) => {
-    await updateUserProfile(socket, dataParse(dataToUpdate));
+    await updateUserProfile(socket, dataToUpdate);
   });
 
   socket.on("get_nearby_users", async (maxRadius) => {

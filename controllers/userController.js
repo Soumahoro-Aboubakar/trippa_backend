@@ -6,6 +6,7 @@ import { isUserOnline } from "../services/socketService.js";
 import jwt from "jsonwebtoken";
 import dotenv from "dotenv";
 import twilio from "twilio";
+import { createNotification } from "../services/notificationService.js";
 const client = twilio(process.env.ACCOUNT_SID, process.env.AUTH_TOKEN_TWILIO);
 function generateCode() {
   return Math.floor(1000 + Math.random() * 9000); // exemple : 4721
@@ -298,39 +299,69 @@ export const getUserProfile = async (socket, userId) => {
   }
 };
 
-// Mettre à jour le profil utilisateur
 export const updateUserProfile = async (socket, updateData) => {
   try {
-    const { bio, interests, isShyMode, visibility, photo, userPseudo } =
-      updateData;
-    const updatePayload = {
-      "profile.bio": bio || "",
-      "profile.interests": interests || [],
-      "profile.isShyMode": isShyMode || false,
-      "profile.visibility": visibility || "public",
-      "profile.userPseudo": userPseudo || "",
-      "profile.photo": photo || "",
-    };
+    const userId = socket.userData._id;
+    let coinsToEarn = 10;
 
-    // Mise à jour atomique avec validation
+    // Construction dynamique du payload
+    const updatePayload = {};
+    if ("bio" in updateData) updatePayload["profile.bio"] = updateData.bio;
+    if ("interests" in updateData) updatePayload["profile.interests"] = updateData.interests;
+    if ("isShyMode" in updateData) updatePayload["profile.isShyMode"] = updateData.isShyMode;
+    if ("visibility" in updateData) updatePayload["profile.visibility"] = updateData.visibility;
+    if ("userPseudo" in updateData) updatePayload["userPseudo"] = updateData.userPseudo;
+    if ("photo" in updateData) updatePayload["profile.photo"] = updateData.photo;
+
+    // Mise à jour atomique
     const updatedUser = await User.findByIdAndUpdate(
-      socket.userData._id, // ID récupéré de l'authentification
+      userId,
       { $set: updatePayload },
       {
         new: true,
         runValidators: true,
-        projection: { profile: 1 }, // Ne retourne que le profil
+        projection: { profile: 1, points: 1, KSD: 1, userPseudo: 1 },
       }
-    ).lean();
+    );
 
-    // Diffusion de la mise à jour
+    if (!updatedUser) {
+      socket.emit("profile:update_error", {
+        status: 404,
+        message: "Utilisateur non trouvé",
+      });
+      return;
+    }
+
+    // Gestion du bonus d'invitation
+    let inviterId = null;
+    if (updateData.InviterKSD) {
+      const inviter = await User.findOne({ KSD: updateData.InviterKSD.toLowerCase() });
+      if (inviter && inviter._id.toString() !== userId.toString()) {
+        inviterId = inviter._id;
+        await User.findByIdAndUpdate(inviterId, { $inc: { points: coinsToEarn } });
+        await User.findByIdAndUpdate(userId, { $inc: { points: Math.floor(coinsToEarn / 2) } });
+      }
+    }
+
     socket.emit("profile:updated", updatedUser.profile);
-    /* 
-                // Optionnel : notifier les autres clients connectés
-                socket.broadcast.emit('profile:updated_global', {
-                    userId: socket.userData._id,
-                    profile: updatedUser.profile
-                }); */
+
+    // Notification à l'inviteur si besoin
+    if (inviterId) {
+      const notification = await createNotification({
+        recipient: inviterId,
+        type: "system_notification",
+        content: {
+          message: `Vous avez reçu un bonus de ${coinsToEarn} points pour l'invitation de ${updatedUser.profile.userPseudo}, KSD:${updatedUser.KSD}`,
+        },
+        coinsEarned: coinsToEarn,
+      });
+      if (global.connectedUsers?.has(inviterId)) {
+        const receiverSocketsId = global.connectedUsers.get(inviterId);
+        const receiverSocket = io.sockets.sockets.get(receiverSocketsId);
+        receiverSocket?.to(receiverSocketsId).emit("notification", notification);
+      }
+    }
+
   } catch (error) {
     console.error("Erreur mise à jour profil:", error);
 
@@ -342,7 +373,7 @@ export const updateUserProfile = async (socket, updateData) => {
     socket.emit("profile:update_error", {
       status: error.statusCode || 500,
       message: errorMessage,
-      details: error.errors, // Optionnel pour le débogage
+      details: error.errors,
     });
   }
 };
