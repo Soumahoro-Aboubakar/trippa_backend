@@ -191,6 +191,7 @@ export const verifyUserSMS = async (socket, code, deviceId, phoneNumber) => {
       message: "Votre compte a été créé avec succès",
       token: token,
       refreshToken: refreshToken,
+      user : user,
     });
   } catch (error) {
     console.error("Erreur lors de la vérification SMS:", error);
