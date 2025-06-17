@@ -335,7 +335,7 @@ export const updateUserProfile = async (socket, updateData) => {
     // Gestion du bonus d'invitation
     let inviterId = null;
     if (updateData.InviterKSD) {
-      const inviter = await User.findOne({ KSD: updateData.InviterKSD.toLowerCase() });
+      const inviter = await User.findOne({ KSD: updateData.InviterKSD?.toUpperCase() });
       if (inviter && inviter._id.toString() !== userId.toString()) {
         inviterId = inviter._id;
         await User.findByIdAndUpdate(inviterId, { $inc: { points: coinsToEarn } });
