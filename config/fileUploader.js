@@ -487,7 +487,7 @@ export const mediaUploader = async (socket) => {
       console.log(`Fichier déjà complété lors de l'init: ${fileId}`);
       socket.emit('upload_initialized', { 
         fileId, 
-        fileUploadedOnBackbazeId : completedFile.mediaPath,
+        fileUploadedOnBackbazeId : completedFile.path,
    //     result : completedFile,
         existingChunks: Array.from({length: expectedChunks}, (_, i) => i),
         alreadyCompleted: true,
@@ -743,7 +743,8 @@ socket.on('file_chunk', async (data) => {
     try {
       const { fileId } = data;
       const status = await getSessionStatus(fileId);
-      socket.emit('upload_status',{ ...status , fileUploadedOnBackbazeId : uploadManager.completedFiles.get(fileId)?.mediaPath || null });
+      console.log(`Statut de l'upload pour fileId ${fileId}:`, status);
+      socket.emit('upload_status',{ ...status , fileUploadedOnBackbazeId : uploadManager.completedFiles.get(fileId)?.path || null });
     } catch (error) {
       socket.emit('upload_error', {
         fileId: data.fileId,
