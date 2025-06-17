@@ -8,7 +8,7 @@ import { Buffer } from 'buffer';
 
 
 
-export const handleMediaUpload = async (socket, fileData) => {
+export const handleMediaUpload = async (fileData) => {
   try {
     // Reconstruire le buffer final
     const fullBuffer = Buffer.concat(fileData.buffer);
@@ -28,12 +28,9 @@ export const handleMediaUpload = async (socket, fileData) => {
     return {
       mediaPath: uploadResult.fileId,
       mediaSize: fullBuffer.length,
-      mediaDuration: fileData.mediaDuration
     };
 
   } catch (error) {
-    console.error('Upload error:', error);
-    socket.emit('upload:error', { error: 'Échec de l\'upload' });
     throw error;
   }
 };

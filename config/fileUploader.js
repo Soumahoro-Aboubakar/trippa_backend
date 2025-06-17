@@ -94,9 +94,7 @@ class UploadManager {
 
   // Nouveau: Marquer un fichier comme terminé avec succès
   markFileCompleted(fileId, filePath) { // le path ici est en rapport avec l'ur du fichier ici tous reussi (backbaze)
-      const existing = this.completedFiles.get(fileId) || {};
-  const updatedRecord = {
-    ...existing,       
+  const updatedRecord = {   
     path: filePath,    
     completedAt: new Date(), 
     fileId: fileId       // Conserver ou mettre à jour l'id
@@ -405,7 +403,6 @@ function validateChunkInput(data) {
 // Fonction pour obtenir le statut d'une session
 async function getSessionStatus(fileId) {
   const session = uploadManager.getSession(fileId);
-  const completedFile = uploadManager.completedFiles.get(fileId);
 
   if (!session) {
     throw new Error('Upload session not found');
@@ -437,7 +434,6 @@ async function getSessionStatus(fileId) {
     existingChunks: existingChunks.sort((a, b) => a - b),
     isComplete: uploadManager.isComplete(fileId),
     totalSize: session.totalSize,
-    fileUploadedOnBackbazeId :  completedFile.path,
   };
 }
 
@@ -546,35 +542,22 @@ export const mediaUploader = async (socket) => {
   }
 });
 
-  async function handleUploadCompletion(socket, fileId, session) {
+  async function handleUploadCompletion( fileId, session) {
   try {
     const finalBuffer = await reconstructFile(fileId, session);
     
-    const mediaResult = await handleMediaUpload(socket, {
+    const mediaResult = await handleMediaUpload({
       buffer: [finalBuffer],
       fileName: session.fileName || `${fileId}.bin`,
       mimeType: session.mimeType || 'application/octet-stream',
-      mediaDuration:  null //A revoir
     });
 
     if (mediaResult && mediaResult.mediaPath) {
       uploadManager.markFileCompleted(fileId, mediaResult.mediaPath);
     }
-    
-    socket.emit('upload_complete', {
-      fileId,
-      success: true,
-      result: mediaResult
-    });
-
-   
+      return mediaResult;
   } catch (error) {
     console.error('Erreur de reconstruction/upload:', error);
-    socket.emit('upload_complete', {
-      fileId,
-      success: false,
-      error: error.message
-    });
   }
 }
 
@@ -638,15 +621,6 @@ socket.on('file_chunk', async (data) => {
         message: 'Chunk already received'
       });
       
-      // SOLUTION 2: Vérifier si l'upload est déjà terminé
-      if (uploadManager.isComplete(fileId)) {
-        socket.emit('upload_complete', {
-          fileId,
-          result: completedFile,
-          success: true,
-          message: 'Upload already completed'
-        });
-      }
       return;
     }
 
@@ -665,11 +639,6 @@ socket.on('file_chunk', async (data) => {
         message: 'Chunk already exists on disk'
       });
       
-      // Vérifier si l'upload est terminé
-      if (uploadManager.isComplete(fileId)) {
-        console.log(`Upload terminé pour le fichier: ${fileId}`);
-        await handleUploadCompletion(socket, fileId, session);
-      }
       return;
     }
 
@@ -725,12 +694,6 @@ socket.on('file_chunk', async (data) => {
 
     console.log(`=== Chunk ${index} traité avec succès ===\n`);
 
-    // Vérifier si l'upload est terminé
-    if (uploadManager.isComplete(fileId)) {
-      console.log(`Upload terminé pour le fichier: ${fileId}`);
-      await handleUploadCompletion(socket, fileId, session);
-    }
-
   } catch (error) {
     console.error(`Erreur de traitement du chunk ${data.index}:`, error);
     socket.emit('chunk_received', {
@@ -744,20 +707,66 @@ socket.on('file_chunk', async (data) => {
 
 
 
-  // Obtenir le statut d'une session
-  socket.on('get_upload_status', async (data) => {
-    try {
-      const { fileId } = data;
+// Obtenir le statut d'une session
+socket.on('get_upload_status', async (data) => {
+  try {
+    const { fileId } = data || {};
+    const session = uploadManager.getSession(fileId);
+    const completedFile = uploadManager.completedFiles.get(fileId);
+
+    if (completedFile) {
+      const status = await getSessionStatus(fileId);
+      console.log(`Fichier déjà complété: ${fileId}`);
+      socket.emit('upload_status', {
+        ...status,
+        fileUploadedOnBackbazeId: completedFile.path,
+        alreadyCompleted: true,
+      });
+      return;
+    }
+
+    // 2. Upload terminé mais pas encore marqué comme complété
+    if (session && uploadManager.isComplete(fileId)) {
+      console.log(`Upload terminé pour le fichier: ${fileId}`);
+      const result = await handleUploadCompletion(fileId, session);
+      const status = await getSessionStatus(fileId);
+      socket.emit('upload_status', {
+        ...status,
+        fileUploadedOnBackbazeId: result?.mediaPath || null,
+        justCompleted: true,
+      });
+      return;
+    }
+
+    // 3. Session en cours ou incomplète
+    if (session) {
       const status = await getSessionStatus(fileId);
       console.log(`Statut de l'upload pour fileId ${fileId}:`, status);
-      socket.emit('upload_status', status);
-    } catch (error) {
-      socket.emit('upload_error', {
-        fileId: data.fileId,
-        error: error.message
+      socket.emit('upload_status', {
+        ...status,
+        fileUploadedOnBackbazeId: null,
+        inProgress: true,
       });
+      return;
     }
-  });
+
+    // 4. Aucun statut trouvé
+    socket.emit('upload_status', {
+      fileId,
+      error: 'Aucune session ou fichier trouvé pour cet identifiant',
+      fileUploadedOnBackbazeId: null,
+      notFound: true,
+    });
+
+  } catch (error) {
+    console.error(`Erreur lors de la récupération du statut d'upload pour fileId ${data.fileId}:`, error);
+    socket.emit('upload_status', {
+      fileId: data?.fileId,
+      error: error.message,
+      fileUploadedOnBackbazeId: null,
+    });
+  }
+});
 
   // Annuler un upload
   socket.on('cancel_upload', async (data) => {
