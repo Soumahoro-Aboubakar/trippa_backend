@@ -431,7 +431,8 @@ async function getSessionStatus(fileId) {
     receivedChunks: Array.from(session.receivedChunks),
     existingChunks: existingChunks.sort((a, b) => a - b),
     isComplete: uploadManager.isComplete(fileId),
-    totalSize: session.totalSize
+    totalSize: session.totalSize,
+    fileUploadedOnBackbazeId :session.path,
   };
 }
 
@@ -744,7 +745,7 @@ socket.on('file_chunk', async (data) => {
       const { fileId } = data;
       const status = await getSessionStatus(fileId);
       console.log(`Statut de l'upload pour fileId ${fileId}:`, status);
-      socket.emit('upload_status',{ ...status , fileUploadedOnBackbazeId : uploadManager.completedFiles.get(fileId)?.path || null });
+      socket.emit('upload_status', status);
     } catch (error) {
       socket.emit('upload_error', {
         fileId: data.fileId,

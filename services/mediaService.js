@@ -23,12 +23,14 @@ export const handleMediaUpload = async (socket, fileData) => {
 
     // Upload vers Backblaze
     const uploadResult = await postFile(virtualFile);
-    
+      console.log('Upload réussi:', uploadResult);
+
     return {
       mediaPath: uploadResult.fileName,
       mediaSize: fullBuffer.length,
       mediaDuration: fileData.mediaDuration
     };
+
   } catch (error) {
     console.error('Upload error:', error);
     socket.emit('upload:error', { error: 'Échec de l\'upload' });
