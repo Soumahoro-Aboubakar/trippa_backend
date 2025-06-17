@@ -94,14 +94,18 @@ class UploadManager {
 
   // Nouveau: Marquer un fichier comme terminé avec succès
   markFileCompleted(fileId, filePath) { // le path ici est en rapport avec l'ur du fichier ici tous reussi (backbaze)
-    this.completedFiles.set(fileId, {
-      path: filePath,
-      completedAt: new Date(),
-      fileId: fileId
-    });
-    console.log(`File marked as completed: ${fileId} at ${filePath}`);
-  }
+      const existing = this.completedFiles.get(fileId) || {};
+  const updatedRecord = {
+    ...existing,       
+    path: filePath,    
+    completedAt: new Date(), 
+    fileId: fileId       // Conserver ou mettre à jour l'id
+  };
+     this.completedFiles.set(fileId, updatedRecord);
 
+    console.log(`File marked as completed: ${fileId} at ${filePath} completed ${this.completedFiles} `);
+  }
+ 
 
 
   
@@ -401,6 +405,7 @@ function validateChunkInput(data) {
 // Fonction pour obtenir le statut d'une session
 async function getSessionStatus(fileId) {
   const session = uploadManager.getSession(fileId);
+  const completedFile = uploadManager.completedFiles.get(fileId);
 
   if (!session) {
     throw new Error('Upload session not found');
@@ -432,7 +437,7 @@ async function getSessionStatus(fileId) {
     existingChunks: existingChunks.sort((a, b) => a - b),
     isComplete: uploadManager.isComplete(fileId),
     totalSize: session.totalSize,
-    fileUploadedOnBackbazeId :session.path,
+    fileUploadedOnBackbazeId :  completedFile.path,
   };
 }
 

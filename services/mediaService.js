@@ -26,7 +26,7 @@ export const handleMediaUpload = async (socket, fileData) => {
       console.log('Upload réussi:', uploadResult);
 
     return {
-      mediaPath: uploadResult.fileName,
+      mediaPath: uploadResult.fileId,
       mediaSize: fullBuffer.length,
       mediaDuration: fileData.mediaDuration
     };
