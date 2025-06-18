@@ -351,7 +351,7 @@ export const updateUserProfile = async (socket, updateData) => {
         recipient: inviterId,
         type: "system_notification",
         content: {
-          message: `Vous avez reçu un bonus de ${coinsToEarn} points pour l'invitation de ${updatedUser.profile.userPseudo}, KSD:${updatedUser.KSD}`,
+          message: `Vous avez reçu un bonus de ${coinsToEarn} points pour l'invitation de ${updatedUser.userPseudo}, KSD:${updatedUser.KSD}`,
         },
         coinsEarned: coinsToEarn,
       });

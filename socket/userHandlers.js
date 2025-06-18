@@ -2,13 +2,43 @@ import User from '../models/user.model.js';
 import Notification from '../models/notification.model.js';
 import { dataParse } from '../utils/validator.js';
 import { createUser, getNearbyUsers, getUserProfile, resendSmsVerificationCode, updateLocation, updateUserProfile, verifyUserSMS } from '../controllers/userController.js';
-/* import { notifyNearbyUsers } from '../services/notificationService.js';
-import { calculateDistance } from '../utils/geoUtils.js';
- */
-/**
- * Gestionnaire d'événements Socket.io pour les utilisateurs
- * @param {Object} io - Instance Socket.io
- */
+import cryptoService from '../crypto/cryptoServiceInstance.js';
+
+
+export async function decryptAndValidateUserData(encryptedData, validateFn = null) {
+  // Vérifier la présence des champs attendus
+  const parsed = dataParse(encryptedData);
+  if (
+    !parsed ||
+    typeof parsed !== 'object' ||
+    !parsed.aesKeyEncrypted ||
+    !parsed.messageEncrypted
+  ) {
+    throw new Error('Données utilisateur chiffrées invalides');
+  }
+
+  // Déchiffrement hybride
+  let userData;
+  try {
+    const decrypted = await cryptoService.hybridDecrypt(parsed, cryptoService.serverKeyPair.privateKey);
+    userData = dataParse(decrypted.message);
+  } catch (decryptErr) {
+    throw new Error('Impossible de déchiffrer les données utilisateur');
+  }
+
+  // Validation basique ou personnalisée
+  const isValid = validateFn
+    ? validateFn(userData)
+    : (userData && typeof userData === 'object' && !!userData.phoneNumber);
+
+  if (!isValid) {
+    throw new Error('Données utilisateur invalides après déchiffrement');
+  }
+
+  return userData;
+}
+
+
 export default function userHandlers(io, socket) {
   /* socket.on("verification:code", async (data) => {
     try {
@@ -18,9 +48,9 @@ export default function userHandlers(io, socket) {
       socket.emit('user:error', { message: 'Erreur interne du serveur' });
     }
   }); */
-  socket.on("verification:code", async (data) => {
+  socket.on("verification:code", async (userDataEncrypted) => {
     try {
-      const { deviceId, code , phoneNumber } = dataParse(data);
+      const { deviceId, code , phoneNumber } = await decryptAndValidateUserData(userDataEncrypted);
       await verifyUserSMS(socket, code, deviceId, phoneNumber);
     }
     catch (error) {
@@ -29,9 +59,9 @@ export default function userHandlers(io, socket) {
     }
   });
   
-  socket.on("resent:verification_code", async (data) => {
+  socket.on("resent:verification_code", async (userDataEncrypted) => {
     try {
-      const { phone } = dataParse(data);
+      const { phone } = await decryptAndValidateUserData(userDataEncrypted);
       await resendSmsVerificationCode(socket, phone);
     }
     catch (error) {
@@ -40,21 +70,31 @@ export default function userHandlers(io, socket) {
     }
   });
   // Écoute de l'événement de création d'utilisateur
-  socket.on('create_user', async (userData) => {
+  socket.on('create_user', async (userDataEncrypted) => {
     try {
-      await createUser(socket, dataParse(userData));
-    } catch (error) {
-      console.error(`Erreur globale: ${error.message}`);
-      socket.emit('user:error', { message: 'Erreur interne du serveur' });
-    }
+    const userData = await decryptAndValidateUserData(userDataEncrypted);
+    await createUser(socket, userData);
+  } catch (error) {
+    console.error(`Erreur lors de la création de l'utilisateur: ${error.message}`);
+    socket.emit('user:error', { message: error.message });
+  }
   });
 
   socket.on("get_user_profile", async (userIdToGetProfile) => {
     await getUserProfile(socket, userIdToGetProfile);
   });
 
-  socket.on("update_user_profile", async (dataToUpdate) => {
+  socket.on("update_user_profile", async (userDataEncrypted) => {
+     
+  try {
+     const dataToUpdate = await decryptAndValidateUserData(userDataEncrypted);
     await updateUserProfile(socket, dataParse(dataToUpdate));
+
+  } catch (error) {
+    console.error(`Erreur lors de la création de l'utilisateur: ${error.message}`);
+    socket.emit('profile:update_error', { message: error.message });
+  }
+
   });
 
   socket.on("get_nearby_users", async (maxRadius) => {
