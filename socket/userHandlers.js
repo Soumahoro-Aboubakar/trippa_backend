@@ -13,38 +13,6 @@ import dotenv from "dotenv";
 dotenv.config();
 
 
-export async function decryptAndValidateUserData(encryptedData) {
-  // Vérifier la présence des champs attendus
-  const parsed = dataParse(encryptedData);
-  if (
-    !parsed ||
-    typeof parsed !== 'object' ||
-    !parsed.aesKeyEncrypted ||
-    !parsed.messageEncrypted
-  ) {
-    throw new Error('Données utilisateur chiffrées invalides');
-  }
-
-  // Déchiffrement hybride
-  let userData;
-  try {
-    const decrypted = await cryptoService.hybridDecrypt(parsed, process.env.PRIVATE_KEY);
-    console.log(decrypted , " data decrypted");
-    userData = dataParse(decrypted.message);
-  } catch (decryptErr) {
-    throw new Error('Impossible de déchiffrer les données utilisateur');
-  }
-
-  // Validation basique ou personnalisée
-  const isValid =  (userData && typeof userData === 'object' && !!userData.phoneNumber);
-
-  if (!isValid) {
-    throw new Error('Données utilisateur invalides après déchiffrement');
-  }
-
-  return userData;
-}
-
 
 export default function userHandlers(io, socket) {
   /* socket.on("verification:code", async (data) => {
@@ -55,9 +23,9 @@ export default function userHandlers(io, socket) {
       socket.emit('user:error', { message: 'Erreur interne du serveur' });
     }
   }); */
-  socket.on("verification:code", async (userDataEncrypted) => {
+  socket.on("verification:code", async (userData) => {
     try {
-      const { deviceId, code , phoneNumber } = await decryptAndValidateUserData(userDataEncrypted);
+      const { deviceId, code , phoneNumber } = dataParse(userData);
       await verifyUserSMS(socket, code, deviceId, phoneNumber);
     }
     catch (error) {
@@ -68,7 +36,7 @@ export default function userHandlers(io, socket) {
   
   socket.on("resent:verification_code", async (userData) => {
     try {
-      const { phone } = userData;
+      const { phone } = dataParse(userData);
       await resendSmsVerificationCode(socket, phone);
     }
     catch (error) {
@@ -77,9 +45,9 @@ export default function userHandlers(io, socket) {
     }
   });
   // Écoute de l'événement de création d'utilisateur
-  socket.on('create_user', async (userDataEncrypted) => {
+  socket.on('create_user', async (userData) => {
     try {
-    const userData = await decryptAndValidateUserData(userDataEncrypted);
+    const userData = dataParse(userData);
     await createUser(socket, userData);
   } catch (error) {
     console.error(`Erreur lors de la création de l'utilisateur: ${error.message}`);
@@ -91,11 +59,10 @@ export default function userHandlers(io, socket) {
     await getUserProfile(socket, userIdToGetProfile);
   });
 
-  socket.on("update_user_profile", async (userDataEncrypted) => {
+  socket.on("update_user_profile", async (data) => {
      
   try {
-     const dataToUpdate = await decryptAndValidateUserData(userDataEncrypted);
-    await updateUserProfile(socket, dataParse(dataToUpdate));
+    await updateUserProfile(socket, dataParse(data));
 
   } catch (error) {
     console.error(`Erreur lors de la création de l'utilisateur: ${error.message}`);

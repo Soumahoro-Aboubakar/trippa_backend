@@ -21,7 +21,6 @@ import { configureStatusSocket } from "./socket/statusHandlers.js";
 import { markExpiredFileShares } from "./services/fileShareService.js";
 import { setupFileShareSocket } from "./socket/fileShareHandlers.js";
 import https from "https";
-import cryptoService from './crypto/cryptoServiceInstance.js';
 
 
 dotenv.config();
@@ -51,7 +50,6 @@ const io = new SocketIO(server, {
 
 
 
-await cryptoService.keysReady;
 //global.uploadService = new UploadService(io);
 
 // Connexion à MongoDB
@@ -107,9 +105,7 @@ io.use((socket, next) => {
 });
 // Initialisation des gestionnaires de sockets
 io.on("connection", async (socket) => {
-   socket.emit("server_public_key", {
-    publicKey: cryptoService.serverKeyPair.publicKey,
-  });
+
   // Gestion du rafraîchissement de token
   socket.on("update:refresh_token", async (data) => {
     try {

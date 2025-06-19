@@ -15,24 +15,6 @@ import { createNotification } from "../services/notificationService.js";
 
 
 
-export async function createEncryptData(userData,userPublicKey) { 
-  // Vérifier la présence des champs attendus
-  if (!userData || typeof userData !== 'object' || !userPublicKey || typeof userPublicKey !== 'string') {
-    throw new Error('Données utilisateur invalides');
-  }
-
-  try {
-    const encryptedData = await cryptoService.hybridEncrypt(
-      JSON.stringify(userData),
-      userPublicKey
-    );
-    return encryptedData;
-  } catch (encryptErr) {
-    throw new Error('Impossible de chiffrer les données utilisateur');
-  }
-}
-
-
 
 const client = twilio(process.env.ACCOUNT_SID, process.env.AUTH_TOKEN_TWILIO);
 function generateCode() {
@@ -239,13 +221,6 @@ export const verifyUserSMS = async (socket, code, deviceId, phoneNumber) => {
       });
       return;
     }
-    if(!user.userKeys?.currentUserPublicKey) {
-      sendVerificationError(socket, {
-        code: 400,
-        message: "Clé publique de l'utilisateur manquante",
-      });
-      return;
-    }
 
     // Vérification du blocage temporaire
     if (isAccountBlocked(user)) {
@@ -283,17 +258,13 @@ export const verifyUserSMS = async (socket, code, deviceId, phoneNumber) => {
     user.refreshTokens.push({ deviceId, token: refreshToken });
      await user.save();
 
-    // Chiffrement des données utilisateur
-    const dataEncrypted = await createEncryptData({
-      token,
-      refreshToken,
-      user,
-    }, user.userKeys.currentUserPublicKey);
-  console.log(dataEncrypted, " dataEncrypted dans verifyUserSMS");
+
     socket.emit("user:created", {
       message: "Votre compte a été créé avec succès",
       code: 200,
-      dataEncrypted,
+      token,
+      refreshToken,
+      user,
     });
   } catch (error) {
     console.error("Erreur lors de la vérification SMS:", error);
@@ -387,12 +358,8 @@ export const getUserProfile = async (socket, userId) => {
     const userResponse = user.toObject();
     userResponse.isOnline = isUserOnline(user._id);
 
-    const dataEncrypted = await createEncryptData({
-      dataEncrypted: userResponse,
-    }, user.userKeys.currentUserPublicKey);
 
-    console.log(dataEncrypted, " dataEncrypted dans getUserProfile");
-    socket.emit("user:profile", { dataEncrypted: dataEncrypted, code: 200 });
+    socket.emit("user:profile", { user: userResponse, code: 200 });
   } catch (error) {
     console.error(
       "Erreur lors de la récupération du profil utilisateur:",
@@ -459,15 +426,12 @@ export const updateUserProfile = async (socket, updateData) => {
         });
       }
     }
-    const dataEncrypted = createEncryptData({
-      profile: updatedUser.profile,
-
-    }, updatedUser.userKeys.currentUserPublicKey);
+   
 
     socket.emit("profile:updated", {
       message: "Votre profile a été mmise à jours avec succès",
       code: 200,
-      dataEncrypted,
+      profile : updatedUser.profile,
     });
 
     // Notification à l'inviteur si besoin
@@ -483,11 +447,9 @@ export const updateUserProfile = async (socket, updateData) => {
       if (global.connectedUsers?.has(inviterId)) {
         const receiverSocketsId = global.connectedUsers.get(inviterId);
         const receiverSocket = io.sockets.sockets.get(receiverSocketsId);
-        const dataEncrypted = await createEncryptData({ notification }, 
-          inviter.userKeys.currentUserPublicKey);
         receiverSocket
           ?.to(receiverSocketsId)
-          .emit("notification", { dataEncrypted: dataEncrypted, code: 200 });
+          .emit("notification", { notification,  code: 200 });
       }
     }
   } catch (error) {
@@ -520,12 +482,7 @@ export const getNearbyUsers = async (socket, data) => {
       return;
     }
 
-    if(!currentUser.userKeys?.currentUserPublicKey) {
-      socket.emit("nearby-users:error", {
-        message: "Clé publique de l'utilisateur manquante",
-      });
-      return;
-    }
+
     // Recherche des utilisateurs proches
     const nearbyUsers = await findNearbyUsers(
       currentUser.location.coordinates,
@@ -543,9 +500,9 @@ export const getNearbyUsers = async (socket, data) => {
       ...user.toObject(),
       isOnline: isUserOnline(user._id),
     }));
-    const dataEncrypted = await createEncryptData({ usersWithStatus },currentUser.userKeys.currentUserPublicKey);
+
     socket.emit("nearby-users:result", {
-      users: dataEncrypted,
+      users: usersWithStatus,
       code: 200,
     });
   } catch (error) {
