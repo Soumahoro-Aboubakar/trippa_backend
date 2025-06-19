@@ -1,47 +1,50 @@
-// crypto-service.js - Service de cryptographie hybride pour Node.js
-import { generateKeyPair, randomBytes, createCipheriv, createDecipheriv, publicEncrypt, constants, privateDecrypt, pbkdf2Sync, createHash } from 'crypto';
+// crypto-service.js - Service de cryptographie hybride pour Node.js compatible Flutter
+
+import { generateKeyPair, randomBytes, createCipheriv, createDecipheriv, publicEncrypt, constants, privateDecrypt, pbkdf2Sync, createHash, createPublicKey } from 'crypto';
+import * as crypto from 'crypto';
 import { promises as fs } from 'fs';
 import { join } from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
+import {fromBER} from 'asn1js';
 
 
 class CryptoService {
     constructor() {
         this.serverKeyPair = null;
-       this.keysReady = this.initializeServerKeys();
+        this.keysReady = this.initializeServerKeys();
     }
 
     /**
      * Initialise les clés du serveur au démarrage
      */
-  async initializeServerKeys() {
+    async initializeServerKeys() {
         try {
-            // Correction pour __dirname avec ES modules
             const __dirname = dirname(fileURLToPath(import.meta.url));
             this.keysDir = join(__dirname, 'keys');
 
-            // Tenter de charger les clés existantes
             this.serverKeyPair = await this.loadServerKeys();
-            global.serverKeyPair = this.serverKeyPair; // Rendre accessible globalement
+            global.serverKeyPair = this.serverKeyPair;
+           // console.log('Clés serveur chargées avec succès.');
+         //   console.log(convertPEMToFlutterFormat(this.serverKeyPair.publicKey) , " ==> server public key");
             console.log('Clés serveur chargées.');
         } catch (error) {
-            // Générer de nouvelles clés si elles n'existent pas
             console.log('Génération de nouvelles clés serveur...');
             this.serverKeyPair = await this.generateRSAKeyPair();
             await this.saveServerKeys(this.serverKeyPair);
-            global.serverKeyPair = this.serverKeyPair; // Rendre accessible globalement
+            global.serverKeyPair = this.serverKeyPair;
             console.log('Nouvelles clés serveur générées et sauvegardées.');
         }
     }
 
     /**
-     * Génère une paire de clés RSA
+     * Génère une paire de clés RSA avec les mêmes paramètres que Flutter
      */
     async generateRSAKeyPair() {
         return new Promise((resolve, reject) => {
             generateKeyPair('rsa', {
                 modulusLength: 2048,
+                publicExponent: 65537, // Même exposant que Flutter
                 publicKeyEncoding: {
                     type: 'spki',
                     format: 'pem'
@@ -55,6 +58,126 @@ class CryptoService {
                 else resolve({ publicKey, privateKey });
             });
         });
+    }
+
+    /**
+     * Convertit une clé publique PEM vers le format Flutter (modulus:exponent)
+     */
+    convertPEMToFlutterFormat(pemPublicKey) {
+         return this.extractRSAParametersManual(pemPublicKey);
+    }
+
+    /**
+     * Méthode fallback pour extraire les paramètres RSA manuellement
+     */
+    extractRSAParametersManual(pemPublicKey) {
+        // Cette méthode utilise une approche plus directe avec les APIs crypto de Node.js
+        
+        try {
+            // Créer un objet clé publique
+            const keyObject = crypto.createPublicKey({
+                key: pemPublicKey,
+                format: 'pem',
+                type: 'spki'
+            });
+            
+            // Exporter au format JWK pour accéder aux paramètres
+            const jwk = keyObject.export({ format: 'jwk' });
+            
+            if (jwk.n && jwk.e) {
+                // Convertir de base64url vers BigInt
+                const modulus = this.base64urlToBigInt(jwk.n);
+                const exponent = this.base64urlToBigInt(jwk.e);
+                
+                const flutterFormat = `${modulus.toString()}:${exponent.toString()}`;
+                return Buffer.from(flutterFormat, 'utf8').toString('base64');
+            }
+            
+            throw new Error('Impossible d\'extraire les paramètres RSA');
+            
+        } catch (error) {
+            console.error('Erreur extraction manuelle:', error);
+            // Dernière solution : utiliser les valeurs par défaut
+            return;
+        }
+    }
+
+    /**
+     * Convertit base64url vers BigInt
+     */
+    base64urlToBigInt(base64url) {
+        // Convertir base64url vers base64 standard
+        let base64 = base64url.replace(/-/g, '+').replace(/_/g, '/');
+        while (base64.length % 4) {
+            base64 += '=';
+        }
+        
+        const buffer = Buffer.from(base64, 'base64');
+        return this.bufferToBigInt(buffer);
+    }
+
+    /**
+     * Convertit un Buffer vers BigInt
+     */
+    bufferToBigInt(buffer) {
+        let result = BigInt(0);
+        for (let i = 0; i < buffer.length; i++) {
+            result = result * BigInt(256) + BigInt(buffer[i]);
+        }
+        return result;
+    }
+
+ 
+
+    /**
+     * Convertit le format Flutter vers PEM pour utilisation côté serveur
+     */
+    convertFlutterFormatToPEM(flutterFormatKey) {
+        try {
+            // Décoder le format Flutter
+            const decoded = Buffer.from(flutterFormatKey, 'base64').toString('utf8');
+            const [modulus, exponent] = decoded.split(':');
+            
+            // Créer la structure ASN.1 pour une clé publique RSA
+            // Cette partie nécessiterait une implémentation ASN.1 complète
+            // Pour simplifier, nous utilisons les APIs Node.js
+            
+            const modulusBigInt = BigInt(modulus);
+            const exponentBigInt = BigInt(exponent);
+            
+            // Convertir vers JWK puis vers PEM
+            const jwk = {
+                kty: 'RSA',
+                n: this.bigIntToBase64url(modulusBigInt),
+                e: this.bigIntToBase64url(exponentBigInt),
+                use: 'enc'
+            };
+            
+            const keyObject = crypto.createPublicKey({ key: jwk, format: 'jwk' });
+            return keyObject.export({ type: 'spki', format: 'pem' });
+            
+        } catch (error) {
+            console.error('Erreur conversion Flutter vers PEM:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Convertit BigInt vers base64url
+     */
+    bigIntToBase64url(bigint) {
+        const buffer = this.bigIntToBuffer(bigint);
+        const base64 = buffer.toString('base64');
+        return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+    }
+
+    /**
+     * Convertit BigInt vers Buffer
+     */
+    bigIntToBuffer(bigint) {
+        const hex = bigint.toString(16);
+        const paddedHex = hex.length % 2 ? '0' + hex : hex;
+        return Buffer.from(paddedHex, 'hex');
     }
 
     /**
@@ -72,69 +195,69 @@ class CryptoService {
     }
 
     /**
-     * Chiffre un message avec AES
+     * Chiffre un message avec AES - Compatible Flutter
      */
- encryptWithAES(message, key, iv) {
-    const cipher = createCipheriv('aes-256-cbc', key, iv);
-    cipher.setAutoPadding(true);
+    encryptWithAES(message, key, iv) {
+        const cipher = createCipheriv('aes-256-cbc', key, iv);
+        cipher.setAutoPadding(true);
 
-    let encrypted = cipher.update(message, 'utf8', 'base64');
-    encrypted += cipher.final('base64');
+        let encrypted = cipher.update(message, 'utf8', 'base64');
+        encrypted += cipher.final('base64');
 
-    return {
-        encryptedMessage: encrypted,
-        iv: iv.toString('base64')
-    };
-}
+        return {
+            encryptedMessage: encrypted,
+            iv: iv.toString('base64')
+        };
+    }
 
     /**
-     * Déchiffre un message avec AES
+     * Déchiffre un message avec AES - Compatible Flutter
      */
- decryptWithAES(encryptedMessage, key, iv) {
-    const decipher = createDecipheriv('aes-256-cbc', key, iv);
-    decipher.setAutoPadding(true);
+    decryptWithAES(encryptedMessage, key, iv) {
+        const decipher = createDecipheriv('aes-256-cbc', key, iv);
+        decipher.setAutoPadding(true);
 
-    let decrypted = decipher.update(encryptedMessage, 'base64', 'utf8');
-    decrypted += decipher.final('utf8');
+        let decrypted = decipher.update(encryptedMessage, 'base64', 'utf8');
+        decrypted += decipher.final('utf8');
 
-    return decrypted;
-}
+        return decrypted;
+    }
 
     /**
-     * Chiffre une clé AES avec RSA
+     * Chiffre une clé AES avec RSA - Utilise OAEP comme Flutter
      */
- async   encryptAESKeyWithRSA(aesKey, publicKey) {
+    encryptAESKeyWithRSA(aesKey, publicKey) {
         return publicEncrypt({
             key: publicKey,
-            padding: constants.RSA_PKCS1_OAEP_PADDING,
-            oaepHash: 'sha256'
+            padding: constants.RSA_PKCS1_OAEP_PADDING, // Même padding que Flutter
+            oaepHash: 'sha1' // Flutter utilise SHA-1 par défaut avec OAEP
         }, aesKey).toString('base64');
     }
 
     /**
-     * Déchiffre une clé AES avec RSA
+     * Déchiffre une clé AES avec RSA - Utilise OAEP comme Flutter
      */
- async   decryptAESKeyWithRSA(encryptedAESKey, privateKey) {
+    decryptAESKeyWithRSA(encryptedAESKey, privateKey) {
         return privateDecrypt({
             key: privateKey,
             padding: constants.RSA_PKCS1_OAEP_PADDING,
-            oaepHash: 'sha256'
+            oaepHash: 'sha1' // Même hash que côté Flutter
         }, Buffer.from(encryptedAESKey, 'base64'));
     }
 
     /**
-     * Chiffrement hybride complet d'un message
+     * Chiffrement hybride complet - Compatible Flutter
      */
- async    hybridEncrypt(message, recipientPublicKey) {
-        // 1. Générer une clé AES aléatoire
+    async hybridEncrypt(message, recipientPublicKey) {
+        // Convertir la clé si elle est au format Flutter
+        let publicKeyPEM = recipientPublicKey;
+     
+
         const aesKey = this.generateAESKey();
         const iv = this.generateIV();
 
-        // 2. Chiffrer le message avec AES
         const { encryptedMessage } = this.encryptWithAES(message, aesKey, iv);
-
-        // 3. Chiffrer la clé AES avec la clé publique RSA du destinataire
-        const encryptedAESKey = this.encryptAESKeyWithRSA(aesKey, recipientPublicKey);
+        const encryptedAESKey = this.encryptAESKeyWithRSA(aesKey, publicKeyPEM);
 
         return {
             encryptedMessage,
@@ -145,17 +268,15 @@ class CryptoService {
     }
 
     /**
-     * Déchiffrement hybride complet d'un message
+     * Déchiffrement hybride complet - Compatible Flutter
      */
-  async  hybridDecrypt(encryptedData, recipientPrivateKey) {
+    async hybridDecrypt(encryptedData, recipientPrivateKey) {
         try {
-            // 1. Déchiffrer la clé AES avec la clé privée RSA
             const aesKey = this.decryptAESKeyWithRSA(
                 encryptedData.encryptedAESKey,
                 recipientPrivateKey
             );
 
-            // 2. Déchiffrer le message avec la clé AES
             const decryptedMessage = this.decryptWithAES(
                 encryptedData.encryptedMessage,
                 aesKey,
@@ -168,34 +289,75 @@ class CryptoService {
                 success: true
             };
         } catch (error) {
+            console.error('Erreur déchiffrement hybride:', error);
             return {
                 message: null,
-                error: 'Échec du déchiffrement',
+                error: 'Échec du déchiffrement: ' + error.message,
                 success: false
             };
         }
     }
 
     /**
+     * Génère un hash de vérification pour les clés publiques - Compatible Flutter
+     */
+    generateKeyFingerprint(publicKey) {
+        return createHash('sha256')
+            .update(publicKey)
+            .digest('hex')
+            .substring(0, 16)
+            .toUpperCase()
+            .match(/.{4}/g)
+            .join(' ');
+    }
+
+    /**
+     * Sauvegarde les clés serveur avec format Flutter
+     */
+    async saveServerKeys(keyPair) {
+        await fs.mkdir(this.keysDir, { recursive: true });
+        await fs.writeFile(join(this.keysDir, 'server_public.pem'), keyPair.publicKey);
+        await fs.writeFile(join(this.keysDir, 'server_private.pem'), keyPair.privateKey);
+        
+         }
+
+    /**
+     * Charge les clés serveur
+     */
+    async loadServerKeys() {
+        const publicKey = await fs.readFile(join(this.keysDir, 'server_public.pem'), 'utf8');
+        const privateKey = await fs.readFile(join(this.keysDir, 'server_private.pem'), 'utf8');
+        return { publicKey : this.convertPEMToFlutterFormat(publicKey), privateKey };
+    }
+
+    /**
+     * Retourne la clé publique du serveur au format PEM
+     */
+    getServerPublicKey() {
+        return (global.serverKeyPair || this.serverKeyPair)?.publicKey;
+    }
+
+    /**
+     * Retourne la clé publique du serveur au format Flutter
+     */
+   
+
+    /**
      * Crée une sauvegarde chiffrée de l'historique
      */
     async createBackup(chatHistory, userPassword) {
-        // Générer une clé de sauvegarde
         const backupKey = this.generateAESKey();
         const iv = this.generateIV();
 
-        // Chiffrer l'historique avec la clé de sauvegarde
         const encryptedHistory = this.encryptWithAES(
             JSON.stringify(chatHistory),
             backupKey,
             iv
         );
 
-        // Créer une clé dérivée du mot de passe utilisateur
         const salt = randomBytes(32);
         const derivedKey = pbkdf2Sync(userPassword, salt, 100000, 32, 'sha256');
 
-        // Chiffrer la clé de sauvegarde avec la clé dérivée
         const backupKeyIV = this.generateIV();
         const encryptedBackupKey = this.encryptWithAES(
             backupKey.toString('base64'),
@@ -218,11 +380,9 @@ class CryptoService {
      */
     async restoreBackup(backupData, userPassword) {
         try {
-            // Reconstituer la clé dérivée du mot de passe
             const salt = Buffer.from(backupData.salt, 'base64');
             const derivedKey = pbkdf2Sync(userPassword, salt, 100000, 32, 'sha256');
 
-            // Déchiffrer la clé de sauvegarde
             const decryptedBackupKey = this.decryptWithAES(
                 backupData.encryptedBackupKey,
                 derivedKey,
@@ -231,7 +391,6 @@ class CryptoService {
 
             const backupKey = Buffer.from(decryptedBackupKey, 'base64');
 
-            // Déchiffrer l'historique
             const decryptedHistory = this.decryptWithAES(
                 backupData.encryptedHistory,
                 backupKey,
@@ -249,43 +408,6 @@ class CryptoService {
                 success: false
             };
         }
-    }
-
-    /**
-     * Génère un hash de vérification pour les clés publiques
-     */
-    generateKeyFingerprint(publicKey) {
-        return createHash('sha256')
-            .update(publicKey)
-            .digest('hex')
-            .substring(0, 16)
-            .toUpperCase()
-            .match(/.{4}/g)
-            .join(' ');
-    }
-
-    /**
-     * Sauvegarde les clés serveur
-     */
-    async saveServerKeys(keyPair) {
-        await fs.mkdir(this.keysDir, { recursive: true });
-        await fs.writeFile(join(this.keysDir, 'server_public.pem'), keyPair.publicKey);
-        await fs.writeFile(join(this.keysDir, 'server_private.pem'), keyPair.privateKey);
-    }
-
-    /**
-     * Charge les clés serveur
-     */
- async loadServerKeys() {
-        const publicKey = await fs.readFile(join(this.keysDir, 'server_public.pem'), 'utf8');
-        const privateKey = await fs.readFile(join(this.keysDir, 'server_private.pem'), 'utf8');
-        return { publicKey, privateKey };
-    }
-    /**
-     * Retourne la clé publique du serveur
-     */
-   getServerPublicKey() {
-        return (global.serverKeyPair || this.serverKeyPair)?.publicKey;
     }
 }
 

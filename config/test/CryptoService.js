@@ -1,16 +1,326 @@
-import crypto from 'crypto';
+// crypto-service.js - Service de cryptographie hybride pour Node.js
+import { generateKeyPair, randomBytes, createCipheriv, createDecipheriv, publicEncrypt, constants, privateDecrypt, pbkdf2Sync, createHash } from 'crypto';
+import { promises as fs } from 'fs';
+import { join } from 'path';
+import { fileURLToPath } from 'url';
+import { dirname } from 'path';
 
-const SECRET_KEY = crypto.createHash('sha256').update(process.env.FILE_SECRET).digest(); 
-const ALGORITHM = 'aes-256-cbc';
 
-export function encryptChunk(buffer, fileId) {
-    const iv = crypto.createHash('md5').update(fileId).digest(); 
-    const cipher = crypto.createCipheriv(ALGORITHM, SECRET_KEY, iv);
-    return Buffer.concat([cipher.update(buffer), cipher.final()]);
+class CryptoService {
+    constructor() {
+        this.serverKeyPair = null;
+       this.keysReady = this.initializeServerKeys();
+    }
+
+    /**
+     * Initialise les clés du serveur au démarrage
+     */
+  async initializeServerKeys() {
+        try {
+            // Correction pour __dirname avec ES modules
+            const __dirname = dirname(fileURLToPath(import.meta.url));
+            this.keysDir = join(__dirname, 'keys');
+
+            // Tenter de charger les clés existantes
+            this.serverKeyPair = await this.loadServerKeys();
+            global.serverKeyPair = this.serverKeyPair; // Rendre accessible globalement
+            console.log('Clés serveur chargées.');
+        } catch (error) {
+            // Générer de nouvelles clés si elles n'existent pas
+            console.log('Génération de nouvelles clés serveur...');
+            this.serverKeyPair = await this.generateRSAKeyPair();
+            await this.saveServerKeys(this.serverKeyPair);
+            global.serverKeyPair = this.serverKeyPair; // Rendre accessible globalement
+            console.log('Nouvelles clés serveur générées et sauvegardées.');
+        }
+    }
+
+    /**
+     * Génère une paire de clés RSA
+     */
+    async generateRSAKeyPair() {
+        return new Promise((resolve, reject) => {
+            generateKeyPair('rsa', {
+                modulusLength: 2048,
+                publicKeyEncoding: {
+                    type: 'spki',
+                    format: 'pem'
+                },
+                privateKeyEncoding: {
+                    type: 'pkcs8',
+                    format: 'pem'
+                }
+            }, (err, publicKey, privateKey) => {
+                if (err) reject(err);
+                else resolve({ publicKey, privateKey });
+            });
+        });
+    }
+
+    /**
+     * Génère une clé AES aléatoire
+     */
+    generateAESKey() {
+        return randomBytes(32); // 256 bits
+    }
+
+    /**
+     * Génère un IV aléatoire pour AES
+     */
+    generateIV() {
+        return randomBytes(16); // 128 bits
+    }
+
+
+async getServerPublicKeyForFlutter() {
+    // Récupère la clé publique PEM
+    const pem = this.getServerPublicKey();
+
+    // Utilise l'API Node.js pour parser la clé
+    const keyObj = createPublicKey(pem);
+    const der = keyObj.export({ type: 'spki', format: 'der' });
+
+    // Décoder le DER pour extraire modulus et exponent
+    // Utilise asn1.js ou fais-le à la main (exemple simple ci-dessous)
+    // Pour une vraie appli, utilise un module ASN.1 comme node-forge ou asn1.js
+
+    // --- Extraction manuelle (simplifiée, pour 2048 bits RSA) ---
+    // Attention : ce code suppose que la clé est bien formatée et 2048 bits
+    // Pour la prod, utilise un vrai parseur ASN.1 !
+
+    // Cherche la séquence modulus (0x02) et exponent (0x02)
+    let offset = der.indexOf(0x02, 0); // modulus
+    let len = der[offset + 1];
+    let modulus = der.slice(offset + 2, offset + 2 + len);
+
+    offset = der.indexOf(0x02, offset + 2 + len); // exponent
+    let expLen = der[offset + 1];
+    let exponent = der.slice(offset + 2, offset + 2 + expLen);
+
+    // Encode en base64
+    const modulusB64 = Buffer.from(modulus).toString('base64');
+    const exponentB64 = Buffer.from(exponent).toString('base64');
+
+    // Format attendu par Flutter : "modulus:exponent"
+    return `${modulusB64}:${exponentB64}`;
 }
 
-export function decryptChunk(buffer, fileId) {
-    const iv = crypto.createHash('md5').update(fileId).digest();
-    const decipher = crypto.createDecipheriv(ALGORITHM, SECRET_KEY, iv);
-    return Buffer.concat([decipher.update(buffer), decipher.final()]);
+    /**
+     * Chiffre un message avec AES
+     */
+ encryptWithAES(message, key, iv) {
+    const cipher = createCipheriv('aes-256-cbc', key, iv);
+    cipher.setAutoPadding(true);
+
+    let encrypted = cipher.update(message, 'utf8', 'base64');
+    encrypted += cipher.final('base64');
+
+    return {
+        encryptedMessage: encrypted,
+        iv: iv.toString('base64')
+    };
 }
+
+    /**
+     * Déchiffre un message avec AES
+     */
+ decryptWithAES(encryptedMessage, key, iv) {
+    const decipher = createDecipheriv('aes-256-cbc', key, iv);
+    decipher.setAutoPadding(true);
+
+    let decrypted = decipher.update(encryptedMessage, 'base64', 'utf8');
+    decrypted += decipher.final('utf8');
+
+    return decrypted;
+}
+
+    /**
+     * Chiffre une clé AES avec RSA
+     */
+ async   encryptAESKeyWithRSA(aesKey, publicKey) {
+        return publicEncrypt({
+            key: publicKey,
+            padding: constants.RSA_PKCS1_OAEP_PADDING,
+            oaepHash: 'sha256'
+        }, aesKey).toString('base64');
+    }
+
+    /**
+     * Déchiffre une clé AES avec RSA
+     */
+ async   decryptAESKeyWithRSA(encryptedAESKey, privateKey) {
+        return privateDecrypt({
+            key: privateKey,
+            padding: constants.RSA_PKCS1_OAEP_PADDING,
+            oaepHash: 'sha256'
+        }, Buffer.from(encryptedAESKey, 'base64'));
+    }
+
+    /**
+     * Chiffrement hybride complet d'un message
+     */
+ async    hybridEncrypt(message, recipientPublicKey) {
+        // 1. Générer une clé AES aléatoire
+        const aesKey = this.generateAESKey();
+        const iv = this.generateIV();
+
+        // 2. Chiffrer le message avec AES
+        const { encryptedMessage } = this.encryptWithAES(message, aesKey, iv);
+
+        // 3. Chiffrer la clé AES avec la clé publique RSA du destinataire
+        const encryptedAESKey = this.encryptAESKeyWithRSA(aesKey, recipientPublicKey);
+
+        return {
+            encryptedMessage,
+            encryptedAESKey,
+            iv: iv.toString('base64'),
+            timestamp: new Date().toISOString()
+        };
+    }
+
+    /**
+     * Déchiffrement hybride complet d'un message
+     */
+  async  hybridDecrypt(encryptedData, recipientPrivateKey) {
+        try {
+            // 1. Déchiffrer la clé AES avec la clé privée RSA
+            const aesKey = this.decryptAESKeyWithRSA(
+                encryptedData.encryptedAESKey,
+                recipientPrivateKey
+            );
+
+            // 2. Déchiffrer le message avec la clé AES
+            const decryptedMessage = this.decryptWithAES(
+                encryptedData.encryptedMessage,
+                aesKey,
+                Buffer.from(encryptedData.iv, 'base64')
+            );
+
+            return {
+                message: decryptedMessage,
+                timestamp: encryptedData.timestamp,
+                success: true
+            };
+        } catch (error) {
+            return {
+                message: null,
+                error: 'Échec du déchiffrement',
+                success: false
+            };
+        }
+    }
+
+    /**
+     * Crée une sauvegarde chiffrée de l'historique
+     */
+    async createBackup(chatHistory, userPassword) {
+        // Générer une clé de sauvegarde
+        const backupKey = this.generateAESKey();
+        const iv = this.generateIV();
+
+        // Chiffrer l'historique avec la clé de sauvegarde
+        const encryptedHistory = this.encryptWithAES(
+            JSON.stringify(chatHistory),
+            backupKey,
+            iv
+        );
+
+        // Créer une clé dérivée du mot de passe utilisateur
+        const salt = randomBytes(32);
+        const derivedKey = pbkdf2Sync(userPassword, salt, 100000, 32, 'sha256');
+
+        // Chiffrer la clé de sauvegarde avec la clé dérivée
+        const backupKeyIV = this.generateIV();
+        const encryptedBackupKey = this.encryptWithAES(
+            backupKey.toString('base64'),
+            derivedKey,
+            backupKeyIV
+        );
+
+        return {
+            encryptedHistory: encryptedHistory.encryptedMessage,
+            historyIV: encryptedHistory.iv,
+            encryptedBackupKey: encryptedBackupKey.encryptedMessage,
+            backupKeyIV: encryptedBackupKey.iv,
+            salt: salt.toString('base64'),
+            createdAt: new Date().toISOString()
+        };
+    }
+
+    /**
+     * Restaure une sauvegarde chiffrée
+     */
+    async restoreBackup(backupData, userPassword) {
+        try {
+            // Reconstituer la clé dérivée du mot de passe
+            const salt = Buffer.from(backupData.salt, 'base64');
+            const derivedKey = pbkdf2Sync(userPassword, salt, 100000, 32, 'sha256');
+
+            // Déchiffrer la clé de sauvegarde
+            const decryptedBackupKey = this.decryptWithAES(
+                backupData.encryptedBackupKey,
+                derivedKey,
+                Buffer.from(backupData.backupKeyIV, 'base64')
+            );
+
+            const backupKey = Buffer.from(decryptedBackupKey, 'base64');
+
+            // Déchiffrer l'historique
+            const decryptedHistory = this.decryptWithAES(
+                backupData.encryptedHistory,
+                backupKey,
+                Buffer.from(backupData.historyIV, 'base64')
+            );
+
+            return {
+                chatHistory: JSON.parse(decryptedHistory),
+                success: true
+            };
+        } catch (error) {
+            return {
+                chatHistory: null,
+                error: 'Mot de passe incorrect ou sauvegarde corrompue',
+                success: false
+            };
+        }
+    }
+
+    /**
+     * Génère un hash de vérification pour les clés publiques
+     */
+    generateKeyFingerprint(publicKey) {
+        return createHash('sha256')
+            .update(publicKey)
+            .digest('hex')
+            .substring(0, 16)
+            .toUpperCase()
+            .match(/.{4}/g)
+            .join(' ');
+    }
+
+    /**
+     * Sauvegarde les clés serveur
+     */
+    async saveServerKeys(keyPair) {
+        await fs.mkdir(this.keysDir, { recursive: true });
+        await fs.writeFile(join(this.keysDir, 'server_public.pem'), keyPair.publicKey);
+        await fs.writeFile(join(this.keysDir, 'server_private.pem'), keyPair.privateKey);
+    }
+
+    /**
+     * Charge les clés serveur
+     */
+ async loadServerKeys() {
+        const publicKey = await fs.readFile(join(this.keysDir, 'server_public.pem'), 'utf8');
+        const privateKey = await fs.readFile(join(this.keysDir, 'server_private.pem'), 'utf8');
+        return { publicKey, privateKey };
+    }
+    /**
+     * Retourne la clé publique du serveur
+     */
+   getServerPublicKey() {
+        return (global.serverKeyPair || this.serverKeyPair)?.publicKey;
+    }
+}
+
+export default CryptoService;

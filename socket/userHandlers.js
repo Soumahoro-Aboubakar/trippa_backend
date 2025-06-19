@@ -61,9 +61,9 @@ export default function userHandlers(io, socket) {
     }
   });
   
-  socket.on("resent:verification_code", async (userDataEncrypted) => {
+  socket.on("resent:verification_code", async (userData) => {
     try {
-      const { phone } = await decryptAndValidateUserData(userDataEncrypted);
+      const { phone } = userData;
       await resendSmsVerificationCode(socket, phone);
     }
     catch (error) {
