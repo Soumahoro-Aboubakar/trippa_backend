@@ -7,6 +7,33 @@ import jwt from "jsonwebtoken";
 import dotenv from "dotenv";
 import twilio from "twilio";
 import { createNotification } from "../services/notificationService.js";
+
+
+
+
+
+
+
+
+export async function createEncryptData(userData,userPublicKey) { 
+  // Vérifier la présence des champs attendus
+  if (!userData || typeof userData !== 'object' || !userPublicKey || typeof userPublicKey !== 'string') {
+    throw new Error('Données utilisateur invalides');
+  }
+
+  try {
+    const encryptedData = await cryptoService.hybridEncrypt(
+      JSON.stringify(userData),
+      userPublicKey
+    );
+    return encryptedData;
+  } catch (encryptErr) {
+    throw new Error('Impossible de chiffrer les données utilisateur');
+  }
+}
+
+
+
 const client = twilio(process.env.ACCOUNT_SID, process.env.AUTH_TOKEN_TWILIO);
 function generateCode() {
   return Math.floor(1000 + Math.random() * 9000); // exemple : 4721
@@ -71,27 +98,28 @@ export const generateToken = (userId) => {
     expiresIn: process.env.TOKEN_EXPIRATION,
   });
 };
-/**
- * Crée un nouvel utilisateur et envoie un SMS de vérification
- * @param {Object} socket - Socket.io socket
- * @param {Object} userData - Données de l'utilisateur
- * @param {string} userData.userPseudo - Pseudo de l'utilisateur
- * @param {string} userData.phone - Numéro de téléphone
- * @param {string} userData.email - Email de l'utilisateur
- * @param {Object} userData.location - Données de localisation
- */
-
 export const createUser = async (socket, userData) => {
   try {
-    const { userPseudo, phone } = userData;
+    const { phone, countryCode, currentUserPublicKey } = userData; //exemple countryCode : CI pour la cote d'ivoire, SN pour le sénégal, 
 
     if (!phone || typeof phone !== "string") {
       socket.emit("user:error", {
         message: "Le numéro de téléphone est requis et doit être valide.",
       });
       return;
+    }  //currentUserPublicKey
+    if (!countryCode || typeof countryCode !== "string" || countryCode.length < 2) {
+      socket.emit("user:error", {
+        message: "Le country code est requis et doit être valide.",
+      });
+      return;
     }
-
+    if (!currentUserPublicKey || typeof currentUserPublicKey !== "string") {
+      socket.emit("user:error", {
+        message: "La clé publique de l'utilisateur est requis et doit être valide.",
+      });
+      return;
+    }
     const trimmedPhone = phone.trim();
     const code = generateCode();
     const now = new Date();
@@ -105,12 +133,16 @@ export const createUser = async (socket, userData) => {
       };
       await user.save();
     } else {
-      const KSD = await generateUniqueKSD();
+      const ksdGenerate = await generateUniqueKSD();
+      const KSD = `${countryCode?.toUpperCase()}-${ksdGenerate}`;
 
       user = new User({
-        userPseudo: userPseudo || "",
         phone: trimmedPhone,
         KSD,
+       userKeys : {
+          lastUserPublicKey: user?.userKeys?.currentUserPublicKey || "",
+          currentUserPublicKey: currentUserPublicKey, // Clé publique de l'utilisateur pour le chiffrement des messages
+       } ,
         verifyCode: {
           code,
           createdAt: now,
@@ -121,11 +153,10 @@ export const createUser = async (socket, userData) => {
     }
 
     //await sendVerificationCode(trimmedPhone, code);
-    console.log(user?.verifyCode?.code ,  "   le code de validation est donné par ici");
-    socket.userData = {
-      // _id: user._id,
-      ...user,
-    };
+    console.log(
+      user?.verifyCode?.code,
+      "   le code de validation est donné par ici"
+    );
 
     // 📤 7. Réponse au client
     socket.emit("verification:sent", {
@@ -141,62 +172,132 @@ export const createUser = async (socket, userData) => {
   }
 };
 
-/**
- * Vérifie le code SMS et finalise la création de l'utilisateur
- * @param {Object} socket - Socket.io socket
- * @param {string} code - Code de vérification SMS
- */
+// === Fonctions utilitaires ===
+
+const sendVerificationError = (socket, payload) => {
+  socket.emit("verification:error", payload);
+};
+
+const isAccountBlocked = (user) => {
+  const maxAge = 24 * 60 * 60 * 1000; // 24 heures
+  const lastAttempt = user.loginAttempts.lastAttemptDate;
+
+  return (
+    user.loginAttempts.current >= user.loginAttempts.maxAllowed &&
+    lastAttempt &&
+    new Date() - lastAttempt < maxAge
+  );
+};
+
+const isCodeExpired = (user) => {
+  const expirationTime = 2 * 60 * 1000; // 2 minutes
+  return new Date() - user.verifyCode.createdAt > expirationTime;
+};
+
+const handleFailedAttempt = async (socket, user) => {
+  user.loginAttempts.current += 1;
+  user.loginAttempts.lastAttemptDate = new Date();
+  await user.save();
+
+  const attemptsLeft =
+    user.loginAttempts.maxAllowed - user.loginAttempts.current;
+
+  if (user.loginAttempts.current >= user.loginAttempts.maxAllowed) {
+    sendVerificationError(socket, {
+      code: 400,
+      status: "blocked",
+      message:
+        "Votre compte a été bloqué pour 24 heures en raison d’un trop grand nombre de tentatives de connexion. Veuillez réessayer après ce délai.",
+    });
+  } else {
+    sendVerificationError(socket, {
+      code: 401,
+      attemptsLeft,
+      message: "Code de vérification incorrect. Veuillez réessayer.",
+    });
+  }
+};
+
+const resetLoginAttempts = (user) => {
+  user.loginAttempts.current = 0;
+  user.loginAttempts.lastAttemptDate = null;
+};
+
 export const verifyUserSMS = async (socket, code, deviceId, phoneNumber) => {
   try {
     if (!phoneNumber || !code) {
-      socket.emit("verification:error", {
-        message: "Session expirée, veuillez recommencer",
-      });
+      sendVerificationError(socket, { message: "Session expirée" });
       return;
     }
 
     const user = await User.findOne({ phone: phoneNumber });
+
     if (!user) {
-      socket.emit("verification:error", {
-        code: 403,
+      sendVerificationError(socket, {
+        code: 404,
         message: "Utilisateur non trouvé",
       });
       return;
     }
-
-    if (code !== user.verifyCode.code) {
-      socket.emit("verification:error", {
-        code: 401,
-        message: "Code de vérification incorrect",
+    if(!user.userKeys?.currentUserPublicKey) {
+      sendVerificationError(socket, {
+        code: 400,
+        message: "Clé publique de l'utilisateur manquante",
       });
       return;
-    } else {
-      const expirationTime = 5 * 60 * 1000; // 5 minutes
-      const isExpired = new Date() - user.verifyCode.createdAt > expirationTime;
-      if (isExpired) {
-        socket.emit("verification:error", {
-          code: 402,
-          message: "Le code de vérification a expiré",
-        });
-        return;
-      }
     }
-    socket.userData = {
-      ...user.toObject(),
-    };
+
+    // Vérification du blocage temporaire
+    if (isAccountBlocked(user)) {
+      sendVerificationError(socket, {
+        code: 403,
+        status: "blocked",
+        message:
+          "Votre compte a été bloqué pour 24 heures en raison d’un trop grand nombre de tentatives de connexion. Veuillez réessayer après ce délai.",
+      });
+      return;
+    }
+
+    // Vérification du code SMS
+    if (user.smsCode !== code) {
+      handleFailedAttempt(socket, user);
+      return;
+    }
+
+    // Vérification expiration du code
+    if (isCodeExpired(user)) {
+      sendVerificationError(socket, {
+        code: 402,
+        message: "Le code de vérification a expiré",
+      });
+      return;
+    }
+
+    // Réinitialisation des tentatives
+    resetLoginAttempts(user);
+
+    // Génération des tokens
     const token = generateToken(socket.userData._id);
     const refreshToken = generateRefreshToken(socket.userData._id);
+
     user.refreshTokens.push({ deviceId, token: refreshToken });
-    await user.save();
+     await user.save();
+
+    // Chiffrement des données utilisateur
+    const dataEncrypted = await createEncryptData({
+      token,
+      refreshToken,
+      user,
+    }, user.userKeys.currentUserPublicKey);
+  console.log(dataEncrypted, " dataEncrypted dans verifyUserSMS");
     socket.emit("user:created", {
       message: "Votre compte a été créé avec succès",
-      token: token,
-      refreshToken: refreshToken,
-      user : user,
+      code: 200,
+      dataEncrypted,
     });
   } catch (error) {
     console.error("Erreur lors de la vérification SMS:", error);
-    socket.emit("verification:error", {
+    sendVerificationError(socket, {
       message: "Une erreur est survenue lors de la vérification",
     });
   }
@@ -286,7 +387,12 @@ export const getUserProfile = async (socket, userId) => {
     const userResponse = user.toObject();
     userResponse.isOnline = isUserOnline(user._id);
 
-    socket.emit("user:profile", userResponse);
+    const dataEncrypted = await createEncryptData({
+      dataEncrypted: userResponse,
+    }, user.userKeys.currentUserPublicKey);
+
+    console.log(dataEncrypted, " dataEncrypted dans getUserProfile");
+    socket.emit("user:profile", { dataEncrypted: dataEncrypted, code: 200 });
   } catch (error) {
     console.error(
       "Erreur lors de la récupération du profil utilisateur:",
@@ -303,15 +409,20 @@ export const updateUserProfile = async (socket, updateData) => {
   try {
     const userId = socket.userData._id;
     let coinsToEarn = 10;
-
+    let inviter = null;
     // Construction dynamique du payload
     const updatePayload = {};
     if ("bio" in updateData) updatePayload["profile.bio"] = updateData.bio;
-    if ("interests" in updateData) updatePayload["profile.interests"] = updateData.interests;
-    if ("isShyMode" in updateData) updatePayload["profile.isShyMode"] = updateData.isShyMode;
-    if ("visibility" in updateData) updatePayload["profile.visibility"] = updateData.visibility;
-    if ("userPseudo" in updateData) updatePayload["userPseudo"] = updateData.userPseudo;
-    if ("photo" in updateData) updatePayload["profile.photo"] = updateData.photo;
+    if ("interests" in updateData)
+      updatePayload["profile.interests"] = updateData.interests;
+    if ("isShyMode" in updateData)
+      updatePayload["profile.isShyMode"] = updateData.isShyMode;
+    if ("visibility" in updateData)
+      updatePayload["profile.visibility"] = updateData.visibility;
+    if ("userPseudo" in updateData)
+      updatePayload["userPseudo"] = updateData.userPseudo;
+    if ("photo" in updateData)
+      updatePayload["profile.photo"] = updateData.photo;
 
     // Mise à jour atomique
     const updatedUser = await User.findByIdAndUpdate(
@@ -335,15 +446,29 @@ export const updateUserProfile = async (socket, updateData) => {
     // Gestion du bonus d'invitation
     let inviterId = null;
     if (updateData.InviterKSD) {
-      const inviter = await User.findOne({ KSD: updateData.InviterKSD?.toUpperCase() });
+        inviter = await User.findOne({
+        KSD: updateData.InviterKSD?.toUpperCase(),
+      });
       if (inviter && inviter._id.toString() !== userId.toString()) {
         inviterId = inviter._id;
-        await User.findByIdAndUpdate(inviterId, { $inc: { points: coinsToEarn } });
-        await User.findByIdAndUpdate(userId, { $inc: { points: Math.floor(coinsToEarn / 2) } });
+        await User.findByIdAndUpdate(inviterId, {
+          $inc: { points: coinsToEarn },
+        });
+        await User.findByIdAndUpdate(userId, {
+          $inc: { points: Math.floor(coinsToEarn / 2) },
+        });
       }
     }
+    const dataEncrypted = createEncryptData({
+      profile: updatedUser.profile,
 
-    socket.emit("profile:updated", updatedUser.profile);
+    }, updatedUser.userKeys.currentUserPublicKey);
+
+    socket.emit("profile:updated", {
+      message: "Votre profile a été mmise à jours avec succès",
+      code: 200,
+      dataEncrypted,
+    });
 
     // Notification à l'inviteur si besoin
     if (inviterId) {
@@ -358,10 +483,13 @@ export const updateUserProfile = async (socket, updateData) => {
       if (global.connectedUsers?.has(inviterId)) {
         const receiverSocketsId = global.connectedUsers.get(inviterId);
         const receiverSocket = io.sockets.sockets.get(receiverSocketsId);
-        receiverSocket?.to(receiverSocketsId).emit("notification", notification);
+        const dataEncrypted = await createEncryptData({ notification }, 
+          inviter.userKeys.currentUserPublicKey);
+        receiverSocket
+          ?.to(receiverSocketsId)
+          .emit("notification", { dataEncrypted: dataEncrypted, code: 200 });
       }
     }
-
   } catch (error) {
     console.error("Erreur mise à jour profil:", error);
 
@@ -392,6 +520,12 @@ export const getNearbyUsers = async (socket, data) => {
       return;
     }
 
+    if(!currentUser.userKeys?.currentUserPublicKey) {
+      socket.emit("nearby-users:error", {
+        message: "Clé publique de l'utilisateur manquante",
+      });
+      return;
+    }
     // Recherche des utilisateurs proches
     const nearbyUsers = await findNearbyUsers(
       currentUser.location.coordinates,
@@ -409,8 +543,11 @@ export const getNearbyUsers = async (socket, data) => {
       ...user.toObject(),
       isOnline: isUserOnline(user._id),
     }));
-
-    socket.emit("nearby-users:result", usersWithStatus);
+    const dataEncrypted = await createEncryptData({ usersWithStatus },currentUser.userKeys.currentUserPublicKey);
+    socket.emit("nearby-users:result", {
+      users: dataEncrypted,
+      code: 200,
+    });
   } catch (error) {
     console.error("Erreur récupération utilisateurs proches:", error);
     socket.emit("nearby-users:error", { message: "Erreur serveur" });

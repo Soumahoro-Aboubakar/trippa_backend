@@ -88,8 +88,7 @@ io.use((socket, next) => {
     socket.userData = { isNew: true };
     return next();
   }
-    socket.serverpublicKey = cryptoService.serverKeyPair.publicKey;
-
+  
   verifyToken(token)
     .then((decoded) => {
       socket.userData = { _id: decoded.userId };
@@ -108,6 +107,9 @@ io.use((socket, next) => {
 });
 // Initialisation des gestionnaires de sockets
 io.on("connection", async (socket) => {
+   socket.emit("server_public_key", {
+    publicKey: cryptoService.serverKeyPair.publicKey,
+  });
   // Gestion du rafraîchissement de token
   socket.on("update:refresh_token", async (data) => {
     try {

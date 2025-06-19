@@ -8,6 +8,10 @@ const roomSchema = new mongoose.Schema({
     description: { type: String, default: "" },
     members: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
     admins: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+     messageDeadline: {
+    type: Date, 
+  },// Date limite d'envoi de messages dans le groupe, modifiable uniquement par le créateur.
+    groupKSD : { type: String, required : true }, /// c'est un KSD (code) commençant par G- et permettant d'identifier un groupe de discussion spécifique via les champs de récherche
     isPaid: { type: Boolean, default: false },
     isPrivate: { type: Boolean, default: false }, //ici cet attribut est pour les groupes privés peux importe le nombre de membres
     isGroup: { type: Boolean, default: false }, //ici cet attribut permet de savoir s'il agit d'une commucation entre deux personnes ou un groupe

@@ -5,6 +5,8 @@ import { createUser, getNearbyUsers, getUserProfile, resendSmsVerificationCode, 
 import cryptoService from '../crypto/cryptoServiceInstance.js';
 
 
+
+
 export async function decryptAndValidateUserData(encryptedData, validateFn = null) {
   // Vérifier la présence des champs attendus
   const parsed = dataParse(encryptedData);

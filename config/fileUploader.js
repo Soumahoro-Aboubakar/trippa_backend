@@ -465,7 +465,7 @@ export const mediaUploader = async (socket) => {
  socket.on('upload_init', async (data) => {
   try {
     const { fileId, userId, expectedChunks, totalSize, fileName, mimeType } = data;
-    
+    console.log("Les informations de l'upload sont:", data);
     // Validation
     if (!fileId || !userId || !expectedChunks || !totalSize) {
       socket.emit('upload_error', { 
@@ -545,10 +545,10 @@ export const mediaUploader = async (socket) => {
   async function handleUploadCompletion( fileId, session) {
   try {
     const finalBuffer = await reconstructFile(fileId, session);
-    
+      console.log("voici le filename de session:", session.fileName);
     const mediaResult = await handleMediaUpload({
       buffer: [finalBuffer],
-      fileName: session.fileName || `${fileId}.bin`,
+      fileName: session.fileName || `${fileId}`,
       mimeType: session.mimeType || 'application/octet-stream',
     });
 

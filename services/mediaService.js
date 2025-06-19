@@ -20,7 +20,7 @@ export const handleMediaUpload = async (fileData) => {
       mimetype: fileData.mimeType,
       size: fullBuffer.length
     };
-
+  console.log('Virtual file created:', virtualFile);
     // Upload vers Backblaze
     const uploadResult = await postFile(virtualFile);
       console.log('Upload réussi:', uploadResult);
