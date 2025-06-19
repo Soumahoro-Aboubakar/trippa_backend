@@ -3,8 +3,14 @@ import Notification from '../models/notification.model.js';
 import { dataParse } from '../utils/validator.js';
 import { createUser, getNearbyUsers, getUserProfile, resendSmsVerificationCode, updateLocation, updateUserProfile, verifyUserSMS } from '../controllers/userController.js';
 import cryptoService from '../crypto/cryptoServiceInstance.js';
+import dotenv from "dotenv";
 
 
+
+
+
+
+dotenv.config();
 
 
 export async function decryptAndValidateUserData(encryptedData) {
@@ -22,7 +28,7 @@ export async function decryptAndValidateUserData(encryptedData) {
   // Déchiffrement hybride
   let userData;
   try {
-    const decrypted = await cryptoService.hybridDecrypt(parsed, cryptoService.serverKeyPair.privateKey);
+    const decrypted = await cryptoService.hybridDecrypt(parsed, process.env.PRIVATE_KEY);
     console.log(decrypted , " data decrypted");
     userData = dataParse(decrypted.message);
   } catch (decryptErr) {
