@@ -7,7 +7,7 @@ import cryptoService from '../crypto/cryptoServiceInstance.js';
 
 
 
-export async function decryptAndValidateUserData(encryptedData, validateFn = null) {
+export async function decryptAndValidateUserData(encryptedData) {
   // Vérifier la présence des champs attendus
   const parsed = dataParse(encryptedData);
   if (
@@ -22,16 +22,15 @@ export async function decryptAndValidateUserData(encryptedData, validateFn = nul
   // Déchiffrement hybride
   let userData;
   try {
-    const decrypted = await cryptoService.hybridDecrypt(parsed, cryptoService.serverKeyPair.privateKey);
+    const decrypted = await cryptoService.hybridDecrypt(parsed, cryptoService.convertPEMToFlutterFormat(cryptoService.serverKeyPair.privateKey));
+    console.log(decrypted , " data decrypted");
     userData = dataParse(decrypted.message);
   } catch (decryptErr) {
     throw new Error('Impossible de déchiffrer les données utilisateur');
   }
 
   // Validation basique ou personnalisée
-  const isValid = validateFn
-    ? validateFn(userData)
-    : (userData && typeof userData === 'object' && !!userData.phoneNumber);
+  const isValid =  (userData && typeof userData === 'object' && !!userData.phoneNumber);
 
   if (!isValid) {
     throw new Error('Données utilisateur invalides après déchiffrement');
