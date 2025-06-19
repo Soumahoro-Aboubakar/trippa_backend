@@ -47,8 +47,8 @@ export default function userHandlers(io, socket) {
   // Écoute de l'événement de création d'utilisateur
   socket.on('create_user', async (userData) => {
     try {
-    const userData = dataParse(userData);
-    await createUser(socket, userData);
+      
+    await createUser(socket, dataParse(userData));
   } catch (error) {
     console.error(`Erreur lors de la création de l'utilisateur: ${error.message}`);
     socket.emit('user:error', { message: error.message });
