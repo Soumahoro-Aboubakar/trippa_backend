@@ -22,7 +22,7 @@ export async function decryptAndValidateUserData(encryptedData) {
   // Déchiffrement hybride
   let userData;
   try {
-    const decrypted = await cryptoService.hybridDecrypt(parsed, cryptoService.convertPEMToFlutterFormat(cryptoService.serverKeyPair.privateKey));
+    const decrypted = await cryptoService.hybridDecrypt(parsed, cryptoService.serverKeyPair.privateKey);
     console.log(decrypted , " data decrypted");
     userData = dataParse(decrypted.message);
   } catch (decryptErr) {
