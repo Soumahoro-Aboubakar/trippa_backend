@@ -113,7 +113,7 @@ export const createUser = async (socket, userData) => {
         code,
         createdAt: now,
       };
-      await user.save();
+   
     } else {
       const ksdGenerate = await generateUniqueKSD();
       const KSD = `${countryCode?.toUpperCase()}-${ksdGenerate}`;
@@ -131,9 +131,8 @@ export const createUser = async (socket, userData) => {
         },
       });
 
-      await user.save();
     }
-
+   await user.save();
     //await sendVerificationCode(trimmedPhone, code);
     console.log(
       user?.verifyCode?.code,

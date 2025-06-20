@@ -15,6 +15,7 @@ dotenv.config();
 
 
 export default function userHandlers(io, socket) {
+  console.log("Je teste pour voir si il y'a une reconnection  dans la fonction userHandlers");
   /* socket.on("verification:code", async (data) => {
     try {
       await verifyUserSMS(socket, data);
@@ -47,7 +48,7 @@ export default function userHandlers(io, socket) {
   // Écoute de l'événement de création d'utilisateur
   socket.on('create_user', async (userData) => {
     try {
-      
+    console.log("un nombre de fois que cet evenement est appelé create_user");
     await createUser(socket, dataParse(userData));
   } catch (error) {
     console.error(`Erreur lors de la création de l'utilisateur: ${error.message}`);
