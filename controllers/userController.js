@@ -194,8 +194,7 @@ const handleFailedAttempt = async (socket, user) => {
     sendVerificationError(socket, {
       code: 401,
       attemptsLeft,
-      message: "Code de vérification incorrect. Veuillez réessayer.",
-    });
+      message: `Le code de vérification est incorrect. Veuillez réessayer. Il vous reste ${attemptsLeft} tentative(s).` });
   }
 };
 
@@ -233,7 +232,7 @@ export const verifyUserSMS = async (socket, code, deviceId, phoneNumber) => {
     }
 
     // Vérification du code SMS
-    if (user.smsCode !== code) {
+    if (user.verifyCode?.code !== code) {
       handleFailedAttempt(socket, user);
       return;
     }

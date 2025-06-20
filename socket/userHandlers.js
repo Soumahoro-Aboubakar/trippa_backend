@@ -2,22 +2,31 @@ import User from '../models/user.model.js';
 import Notification from '../models/notification.model.js';
 import { dataParse } from '../utils/validator.js';
 import { createUser, getNearbyUsers, getUserProfile, resendSmsVerificationCode, updateLocation, updateUserProfile, verifyUserSMS } from '../controllers/userController.js';
-import cryptoService from '../crypto/cryptoServiceInstance.js';
 import dotenv from "dotenv";
 
 
 
-
-
+const events = [
+  "create_user",
+  "verification:code",
+  "resent:verification_code",
+  "get_user_profile",
+  "update_user_profile",
+  "get_nearby_users",
+  "update_user_location",
+  "update-location",
+  "find-nearby-users",
+  "profile-viewed",
+  "toggle-shy-mode",
+  "change-visibility"
+];
 
 dotenv.config();
 
 
 
 export default function userHandlers(io, socket) {
-  console.log("Je teste pour voir si il y'a une reconnection  dans la fonction userHandlers");
-  socket.removeAllListeners("create_user");
-
+  events.forEach(event => socket.removeAllListeners(event)); //Permet  d'eviter l'envoi multiple de réponse suite au rérendu multiple
   /* socket.on("verification:code", async (data) => {
     try {
       await verifyUserSMS(socket, data);
@@ -50,7 +59,6 @@ export default function userHandlers(io, socket) {
   // Écoute de l'événement de création d'utilisateur
   socket.on('create_user', async (userData) => {
     try {
-    console.log("un nombre de fois que cet evenement est appelé create_user");
     await createUser(socket, dataParse(userData));
   } catch (error) {
     console.error(`Erreur lors de la création de l'utilisateur: ${error.message}`);
