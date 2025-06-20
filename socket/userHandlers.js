@@ -16,6 +16,8 @@ dotenv.config();
 
 export default function userHandlers(io, socket) {
   console.log("Je teste pour voir si il y'a une reconnection  dans la fonction userHandlers");
+  socket.removeAllListeners("create_user");
+
   /* socket.on("verification:code", async (data) => {
     try {
       await verifyUserSMS(socket, data);
