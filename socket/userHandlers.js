@@ -35,8 +35,10 @@ export default function userHandlers(io, socket) {
       socket.emit('user:error', { message: 'Erreur interne du serveur' });
     }
   }); */
+  print("la fonction se rends encores *//////////////////////////////////////");
   socket.on("verification:code", async (userData) => {
     try {
+      console.log("l'utilisateur veux verifier son code d'acces afin...");
       const { deviceId, code , phoneNumber } = dataParse(userData);
       await verifyUserSMS(socket, code, deviceId, phoneNumber);
     }
