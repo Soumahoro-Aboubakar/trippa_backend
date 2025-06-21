@@ -77,7 +77,8 @@ export const generateRefreshToken = (userId) => {
   });
 };
 export const generateToken = (userId) => {
-  return jwt.sign({ userId }, process.env.JWT_SECRET, {
+  console.log("user id pour en encoder le token  " , userId);
+  return jwt.sign({ userId : userId }, process.env.JWT_SECRET, {
     expiresIn: process.env.TOKEN_EXPIRATION,
   });
 };
@@ -251,8 +252,8 @@ export const verifyUserSMS = async (socket, code, deviceId, phoneNumber) => {
     resetLoginAttempts(user);
 
     // Génération des tokens
-    const token = generateToken(user._id);
-    const refreshToken = generateRefreshToken(user._id);
+    const token = generateToken(user._id.toString());
+    const refreshToken = generateRefreshToken(user._id.toString());
     const tokenHacher = await hashRefreshToken(refreshToken);
     user.refreshTokens.push({ deviceId, token: tokenHacher});
     const isNewMember = user.isNewMember;
