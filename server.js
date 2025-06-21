@@ -82,6 +82,7 @@ global.connectedUsers = new Map();
 // Middleware d'authentification Socket.IO
 io.use((socket, next) => {
   const token = socket.handshake.query.token;
+  console.log(" le token courrent est  :  *////////////////////////" , token);
   if (!token) {
     socket.userData = { isNew: true };
     return next();
@@ -90,9 +91,11 @@ io.use((socket, next) => {
   verifyToken(token)
     .then((decoded) => {
       socket.userData = { _id: decoded.userId };
+      console.log("token decoder avec succès *////////////////////", decoded);
       next();
     })
     .catch((error) => {
+    console.log("une erreur tès importante apparue  *///////////////////////////////// ",error);
       socket.onAny((eventName, ...args) => {
         if (eventName && authEvenNames.includes(eventName.trim())) next();
       });
@@ -133,6 +136,7 @@ io.on("connection", async (socket) => {
   } else {
     // Utilisateur non authentifié, limiter les événements disponibles
     socket.onAny((eventName, ...args) => {
+       console.log("on desctive l'evenement hein *///////////////" , eventName);
       if (eventName && !authEvenNames.includes(eventName.trim()))
         return socket.disconnect();
     });
@@ -140,6 +144,7 @@ io.on("connection", async (socket) => {
 
   console.log(`Utilisateur connecté: ${socket.userData._id}`);
   console.log(`Nombre d'utilisateurs connectés: ${global.connectedUsers.size}`);
+
   //global.uploadService.registerSocketHandlers(socket);
   userHandlers(io, socket);
   //setupSocketHandlers(io); //une fonction permet de gérer les utilitaires des  utilisateurs
