@@ -253,8 +253,8 @@ export const verifyUserSMS = async (socket, code, deviceId, phoneNumber) => {
     // Génération des tokens
     const token = generateToken(socket.userData._id);
     const refreshToken = generateRefreshToken(socket.userData._id);
-
-    user.refreshTokens.push({ deviceId, token: hashRefreshToken(refreshToken) });
+    const tokenHacher = await hashRefreshToken(refreshToken);
+    user.refreshTokens.push({ deviceId, token: tokenHacher});
     const isNewMember = user.isNewMember;
      user.isNewMember   = false;
      await user.save();
