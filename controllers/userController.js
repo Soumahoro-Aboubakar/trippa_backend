@@ -251,8 +251,8 @@ export const verifyUserSMS = async (socket, code, deviceId, phoneNumber) => {
     resetLoginAttempts(user);
 
     // Génération des tokens
-    const token = generateToken(socket.userData._id);
-    const refreshToken = generateRefreshToken(socket.userData._id);
+    const token = generateToken(user._id);
+    const refreshToken = generateRefreshToken(user._id);
     const tokenHacher = await hashRefreshToken(refreshToken);
     user.refreshTokens.push({ deviceId, token: tokenHacher});
     const isNewMember = user.isNewMember;
@@ -375,7 +375,14 @@ export const getUserProfile = async (socket, userId) => {
 
 export const updateUserProfile = async (socket, updateData) => {
   try {
-    const userId = socket.userData._id;
+    if(!updateData) {
+        socket.emit("profile:update_error", {
+        status: 404,
+        message: "Données non trouvées",
+      });
+      return;
+    }
+    const userId = updateData._id;
     let coinsToEarn = 10;
     let inviter = null;
     // Construction dynamique du payload
