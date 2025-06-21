@@ -5,12 +5,20 @@ const UserSchema = new Schema(
     userPseudo: { type: String },
     phone: { type: String, required: true },
     refreshTokens: [{ deviceId: String, token: String }],
+
+    rank: {
+      type: String,
+      enum: ["E", "D", "C", "B", "A", "S", "SS", "S++"],
+      default: "E",
+    }, //inspirer de solo leveling
     userKeys: {
-      lastUserPublicKey: { type : String},  
+      lastUserPublicKey: { type: String },
       currentUserPublicKey: { type: String, required: true }, // Clé publique de l'utilisateur pour le chiffrement des messages
     }, // Clé publique de l'utilisateur pour le chiffrement des messages
     points: { type: Number, default: 10 },
-    usersBanned : [{ type: Schema.Types.ObjectId, ref: "User" , banneDate : Date }], // Liste des utilisateurs bannis 
+    usersBanned: [
+      { type: Schema.Types.ObjectId, ref: "User", banneDate: Date },
+    ], // Liste des utilisateurs bannis
     loginAttempts: {
       current: {
         type: Number,
@@ -108,7 +116,7 @@ const UserSchema = new Schema(
     isOnline: { type: Boolean, default: false },
     lastConnection: { type: Date },
     isVerified: { type: Boolean, default: false }, ///Pour l'optention de badge
-    isNewMember : {type : Boolean , default : true},
+    isNewMember: { type: Boolean, default: true },
     sharedCollections: [
       {
         //Collection des article de bissines
@@ -150,6 +158,15 @@ const UserSchema = new Schema(
         },
       },
     ],
+    messageOptions: {
+      type: String,
+      enum: ["text", "audio", "all", "only_text", "only_audio", "only_file"],
+      default: "all",
+    },
+    canUsePayments: {
+      type: Boolean,
+      default: false,
+    },
   },
   {
     timestamps: true,

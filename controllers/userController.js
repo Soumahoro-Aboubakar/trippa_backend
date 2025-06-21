@@ -9,13 +9,21 @@ import twilio from "twilio";
 import { createNotification } from "../services/notificationService.js";
 import { hashRefreshToken } from "../services/authService.js";
 
-
-
-
-
-
-
-
+function isValidObjectId(id) {
+  return mongoose.Types.ObjectId.isValid(id);
+}
+const forbiddenKeys = [
+  "$where",
+  "$ne",
+  "$gt",
+  "$lt",
+  "$in",
+  "$nin",
+  "$or",
+  "$and",
+  "$set",
+  "$push",
+];
 
 const client = twilio(process.env.ACCOUNT_SID, process.env.AUTH_TOKEN_TWILIO);
 function generateCode() {
@@ -77,22 +85,26 @@ export const generateRefreshToken = (userId) => {
   });
 };
 export const generateToken = (userId) => {
-  console.log("user id pour en encoder le token  " , userId);
-  return jwt.sign({ userId : userId }, process.env.JWT_SECRET, {
+  console.log("user id pour en encoder le token  ", userId);
+  return jwt.sign({ userId: userId }, process.env.JWT_SECRET, {
     expiresIn: process.env.TOKEN_EXPIRATION,
   });
 };
 export const createUser = async (socket, userData) => {
   try {
-    const { phone, countryCode, currentUserPublicKey } = userData; //exemple countryCode : CI pour la cote d'ivoire, SN pour le sénégal, 
+    const { phone, countryCode, currentUserPublicKey } = userData; //exemple countryCode : CI pour la cote d'ivoire, SN pour le sénégal,
 
     if (!phone || typeof phone !== "string") {
       socket.emit("user:error", {
         message: "Le numéro de téléphone est requis et doit être valide.",
       });
       return;
-    }  //currentUserPublicKey
-    if (!countryCode || typeof countryCode !== "string" || countryCode.length < 2) {
+    } //currentUserPublicKey
+    if (
+      !countryCode ||
+      typeof countryCode !== "string" ||
+      countryCode.length < 2
+    ) {
       socket.emit("user:error", {
         message: "Le country code est requis et doit être valide.",
       });
@@ -100,7 +112,8 @@ export const createUser = async (socket, userData) => {
     }
     if (!currentUserPublicKey || typeof currentUserPublicKey !== "string") {
       socket.emit("user:error", {
-        message: "La clé publique de l'utilisateur est requis et doit être valide.",
+        message:
+          "La clé publique de l'utilisateur est requis et doit être valide.",
       });
       return;
     }
@@ -115,7 +128,6 @@ export const createUser = async (socket, userData) => {
         code,
         createdAt: now,
       };
-   
     } else {
       const ksdGenerate = await generateUniqueKSD();
       const KSD = `${countryCode?.toUpperCase()}-${ksdGenerate}`;
@@ -123,18 +135,17 @@ export const createUser = async (socket, userData) => {
       user = new User({
         phone: trimmedPhone,
         KSD,
-       userKeys : {
+        userKeys: {
           lastUserPublicKey: user?.userKeys?.currentUserPublicKey || "",
           currentUserPublicKey: currentUserPublicKey, // Clé publique de l'utilisateur pour le chiffrement des messages
-       } ,
+        },
         verifyCode: {
           code,
           createdAt: now,
         },
       });
-
     }
-   await user.save();
+    await user.save();
     //await sendVerificationCode(trimmedPhone, code);
     console.log(
       user?.verifyCode?.code,
@@ -196,7 +207,8 @@ const handleFailedAttempt = async (socket, user) => {
     sendVerificationError(socket, {
       code: 401,
       attemptsLeft,
-      message: `Le code de vérification est incorrect. Veuillez réessayer. Il vous reste ${attemptsLeft} tentative(s).` });
+      message: `Le code de vérification est incorrect. Veuillez réessayer. Il vous reste ${attemptsLeft} tentative(s).`,
+    });
   }
 };
 
@@ -207,6 +219,23 @@ const resetLoginAttempts = (user) => {
 
 export const verifyUserSMS = async (socket, code, deviceId, phoneNumber) => {
   try {
+    const phoneRegex = /^\+\d{7,15}(?:\s?\d+)*$/;
+    if (
+      !phoneNumber ||
+      typeof phoneNumber !== "string" ||
+      !phoneRegex.test(phoneNumber.replace(/\s+/g, ""))
+    ) {
+      sendVerificationError(socket, {
+        message: "Numéro de téléphone invalide",
+      });
+      return;
+    }
+    if (!code || typeof code !== "string" || !/^[0-9]{4,6}$/.test(code)) {
+      sendVerificationError(socket, {
+        message: "Code de vérification invalide",
+      });
+      return;
+    }
     if (!phoneNumber || !code) {
       sendVerificationError(socket, { message: "Session expirée" });
       return;
@@ -255,10 +284,10 @@ export const verifyUserSMS = async (socket, code, deviceId, phoneNumber) => {
     const token = generateToken(user._id.toString());
     const refreshToken = generateRefreshToken(user._id.toString());
     const tokenHacher = await hashRefreshToken(refreshToken);
-    user.refreshTokens.push({ deviceId, token: tokenHacher});
+    user.refreshTokens.push({ deviceId, token: tokenHacher });
     const isNewMember = user.isNewMember;
-     user.isNewMember   = false;
-     await user.save();
+    user.isNewMember = false;
+    await user.save();
 
     socket.emit("user:created", {
       message: "Votre compte a été créé avec succès",
@@ -266,7 +295,7 @@ export const verifyUserSMS = async (socket, code, deviceId, phoneNumber) => {
       token,
       refreshToken,
       user,
-      isNewMember : isNewMember,
+      isNewMember: isNewMember,
     });
   } catch (error) {
     console.error("Erreur lors de la vérification SMS:", error);
@@ -324,6 +353,13 @@ export const resendSmsVerificationCode = async (socket, phone) => {
 // Obtenir le profil utilisateur
 export const getUserProfile = async (socket, userId) => {
   try {
+    if (!isValidObjectId(userId)) {
+      socket.emit("user:profile_error", {
+        status: 400,
+        message: "ID utilisateur invalide",
+      });
+      return;
+    }
     const filterData =
       userId === socket.userData._id
         ? ""
@@ -360,7 +396,6 @@ export const getUserProfile = async (socket, userId) => {
     const userResponse = user.toObject();
     userResponse.isOnline = isUserOnline(user._id);
 
-
     socket.emit("user:profile", { user: userResponse, code: 200 });
   } catch (error) {
     console.error(
@@ -376,12 +411,21 @@ export const getUserProfile = async (socket, userId) => {
 
 export const updateUserProfile = async (socket, updateData) => {
   try {
-    if(!updateData) {
-        socket.emit("profile:update_error", {
+    if (!updateData) {
+      socket.emit("profile:update_error", {
         status: 404,
         message: "Données non trouvées",
       });
       return;
+    }
+    for (const key in updateData) {
+      if (forbiddenKeys.includes(key)) {
+        socket.emit("profile:update_error", {
+          status: 400,
+          message: "Clé de mise à jour non autorisée.",
+        });
+        return;
+      }
     }
     const userId = updateData._id;
     let coinsToEarn = 10;
@@ -422,7 +466,7 @@ export const updateUserProfile = async (socket, updateData) => {
     // Gestion du bonus d'invitation
     let inviterId = null;
     if (updateData.InviterKSD) {
-        inviter = await User.findOne({
+      inviter = await User.findOne({
         KSD: updateData.InviterKSD?.toUpperCase(),
       });
       if (inviter && inviter._id.toString() !== userId.toString()) {
@@ -435,12 +479,11 @@ export const updateUserProfile = async (socket, updateData) => {
         });
       }
     }
-   
 
     socket.emit("profile:updated", {
       message: "Votre profile a été mmise à jours avec succès",
       code: 200,
-      profile : updatedUser.profile,
+      profile: updatedUser.profile,
     });
 
     // Notification à l'inviteur si besoin
@@ -458,7 +501,7 @@ export const updateUserProfile = async (socket, updateData) => {
         const receiverSocket = io.sockets.sockets.get(receiverSocketsId);
         receiverSocket
           ?.to(receiverSocketsId)
-          .emit("notification", { notification,  code: 200 });
+          .emit("notification", { notification, code: 200 });
       }
     }
   } catch (error) {
@@ -490,7 +533,6 @@ export const getNearbyUsers = async (socket, data) => {
       });
       return;
     }
-
 
     // Recherche des utilisateurs proches
     const nearbyUsers = await findNearbyUsers(
