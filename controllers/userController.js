@@ -7,6 +7,7 @@ import jwt from "jsonwebtoken";
 import dotenv from "dotenv";
 import twilio from "twilio";
 import { createNotification } from "../services/notificationService.js";
+import { hashRefreshToken } from "../services/authService.js";
 
 
 
@@ -72,7 +73,7 @@ const generateUniqueKSD = async () => {
 };
 export const generateRefreshToken = (userId) => {
   return jwt.sign({ userId }, process.env.JWT_REFRESH_SECRET, {
-    expiresIn: "30d",
+    expiresIn: process.env.REFRESH_TOKEN_EXPIRATION,
   });
 };
 export const generateToken = (userId) => {
@@ -253,9 +254,10 @@ export const verifyUserSMS = async (socket, code, deviceId, phoneNumber) => {
     const token = generateToken(socket.userData._id);
     const refreshToken = generateRefreshToken(socket.userData._id);
 
-    user.refreshTokens.push({ deviceId, token: refreshToken });
+    user.refreshTokens.push({ deviceId, token: hashRefreshToken(refreshToken) });
+    const isNewMember = user.isNewMember;
+     user.isNewMember   = false;
      await user.save();
-
 
     socket.emit("user:created", {
       message: "Votre compte a été créé avec succès",
@@ -263,6 +265,7 @@ export const verifyUserSMS = async (socket, code, deviceId, phoneNumber) => {
       token,
       refreshToken,
       user,
+      isNewMember : isNewMember,
     });
   } catch (error) {
     console.error("Erreur lors de la vérification SMS:", error);

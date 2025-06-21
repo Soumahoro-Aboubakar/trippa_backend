@@ -108,6 +108,7 @@ const UserSchema = new Schema(
     isOnline: { type: Boolean, default: false },
     lastConnection: { type: Date },
     isVerified: { type: Boolean, default: false }, ///Pour l'optention de badge
+    isNewMember : {type : Boolean , default : true},
     sharedCollections: [
       {
         //Collection des article de bissines

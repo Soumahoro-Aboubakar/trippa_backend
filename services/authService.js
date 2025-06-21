@@ -3,8 +3,20 @@ import jwt from 'jsonwebtoken';
 import User from '../models/user.model.js';
 import { generateRefreshToken, generateToken } from '../controllers/userController.js';
 import dotenv from 'dotenv';
+import bcrypt from "bcrypt";
+
 
 dotenv.config();
+// Fonction pour hasher un refresh token
+export async function hashRefreshToken(token) {
+  const saltRounds = 10;
+  return await bcrypt.hash(token, saltRounds);
+}
+
+// Fonction pour comparer un refresh token fourni avec celui stocké (haché)
+export async function compareRefreshToken(providedToken, hashedToken) {
+  return await bcrypt.compare(providedToken, hashedToken);
+}
 /**
  * Vérifie la validité d'un token JWT
  * @param {string} token - Le token JWT à vérifier
@@ -32,7 +44,7 @@ export const refreshUserToken = async (data) => {
     const { refreshToken, deviceId, userId } = data;
 
     // Validation des données d'entrée
-    if (!refreshToken || !deviceId || !userId) {
+    if (!refreshToken || !deviceId) {
         return { error: { code: 400, message: "Paramètres manquants" } };
     }
 
@@ -46,7 +58,9 @@ export const refreshUserToken = async (data) => {
         // Vérification du token de rafraîchissement
         const refreshTokens = userData.refreshTokens || [];
         const tokenData = refreshTokens.find(token => token.deviceId === deviceId);
-
+        if(!tokenData || !compareRefreshToken(refreshToken,tokenData.token)){
+            return { error: { code: 401, message: "Token non reconnu" }};
+        };
         return new Promise((resolve) => {
             jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET, async (err, user) => {
                 if (err) {
