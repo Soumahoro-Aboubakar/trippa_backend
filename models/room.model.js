@@ -8,6 +8,7 @@ const roomSchema = new mongoose.Schema(
       ref: "User",
       required: true,
     },
+    isVerified : { type :Boolean , default : false},
     roomAccessCode: { type: String, unique: true },
     description: { type: String, default: "" },
     members: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],

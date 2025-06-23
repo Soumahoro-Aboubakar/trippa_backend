@@ -1,7 +1,7 @@
 import User from '../models/user.model.js';
 import Notification from '../models/notification.model.js';
 import { dataParse } from '../utils/validator.js';
-import { createUser, getNearbyUsers, getUserProfile, resendSmsVerificationCode, updateLocation, updateUserProfile, verifyUserSMS } from '../controllers/userController.js';
+import { createUser, getNearbyUsers, getUserProfile, handleGetUserByKSD, resendSmsVerificationCode, updateLocation, updateUserProfile, verifyUserSMS } from '../controllers/userController.js';
 import dotenv from "dotenv";
 
 
@@ -38,7 +38,6 @@ export default function userHandlers(io, socket) {
   console.log("la fonction se rends encores *//////////////////////////////////////");
   socket.on("verification:code", async (userData) => {
     try {
-      console.log("l'utilisateur veux verifier son code d'acces afin...");
       const { deviceId, code , phoneNumber } = dataParse(userData);
       await verifyUserSMS(socket, code, deviceId, phoneNumber);
     }
@@ -67,11 +66,6 @@ export default function userHandlers(io, socket) {
     socket.emit('user:error', { message: error.message });
   }
   });
-
-  socket.on("get_user_profile", async (userIdToGetProfile) => {
-    await getUserProfile(socket, userIdToGetProfile);
-  });
-
   socket.on("update_user_profile", async (data) => {
      
   try {
@@ -83,6 +77,17 @@ export default function userHandlers(io, socket) {
   }
 
   });
+
+
+
+
+
+  //***********************Voici les événements non utilisé pour l'instant  */
+  socket.on("get_user_profile", async (userIdToGetProfile) => {
+    await getUserProfile(socket, userIdToGetProfile);
+  });
+
+
 
   socket.on("get_nearby_users", async (maxRadius) => {
     await getNearbyUsers(socket, maxRadius);
@@ -286,7 +291,6 @@ export default function userHandlers(io, socket) {
       socket.emit('error', { message: 'Erreur de serveur lors de la mise à jour du mode discret' });
     }
   });
-
   // Changer la visibilité du profil
   socket.on('change-visibility', async (data) => {
     try {
@@ -315,6 +319,11 @@ export default function userHandlers(io, socket) {
       socket.emit('error', { message: 'Erreur de serveur lors du changement de visibilité' });
     }
   });
+
+  ///*****************Ce sont les événements utilisé mais qui utilisent un callBack comme paramètre */
+
+  socket.on("get_user_by_KSD", handleGetUserByKSD);
+
 }
 
 // Utilitaire pour rejoindre des salles géographiques

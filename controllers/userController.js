@@ -520,6 +520,27 @@ export const updateUserProfile = async (socket, updateData) => {
   }
 };
 
+
+export async function handleGetUserByKSD(KSD, userId, callback) {
+  try {
+    if (!KSD) {
+      return callback({ error: "KSD manquant" });
+    }
+    const filterData =
+      userId === socket.userData._id
+        ? ""
+        : "-wallet -phone -email -phone -location -lastLocation -profile.profileViewers -profile.statusViewers -statusShared";
+
+    const user = await User.findOne({ KSD }).select(`${filterData} -refreshTokens -userKeys`);
+    if (!user) {
+      return callback({ error: "Utilisateur non trouvé" });
+    }
+    callback({ user });
+  } catch (err) {
+    callback({ error: "Erreur serveur", details: err.message });
+  }
+}
+
 // Trouver des utilisateurs à proximité (version Socket.io)
 export const getNearbyUsers = async (socket, data) => {
   try {
