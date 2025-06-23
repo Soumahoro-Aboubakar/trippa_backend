@@ -112,9 +112,9 @@ io.on("connection", async (socket) => {
   // Gestion du rafraîchissement de token
   socket.on("update:refresh_token", async (data) => {
     try {
-      console.log(" voici la data parser pour refreche le token : " , data);
+      console.log(" voici la data parser pour refreche le token : " , dataParse(data));
       const result = await refreshUserToken({
-        ...data,
+        ...dataParse(data),
       });
       if (result.error) {
         socket.emit("refresh_error", result.error);
