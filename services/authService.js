@@ -58,9 +58,13 @@ export const refreshUserToken = async (data) => {
         // Vérification du token de rafraîchissement
         const refreshTokens = userData.refreshTokens || [];
         const tokenData = refreshTokens.find(token => token.deviceId === deviceId);
+        
+        console.log(" Voici le token store dans la base d donée   : ", tokenData);
+
         if(!tokenData || !compareRefreshToken(refreshToken,tokenData.token)){
             return { error: { code: 401, message: "Token non reconnu" }};
         };
+        
         return new Promise((resolve) => {
             jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET, async (err, user) => {
                 if (err) {

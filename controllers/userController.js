@@ -145,6 +145,7 @@ export const createUser = async (socket, userData) => {
         },
       });
     }
+
     await user.save();
     //await sendVerificationCode(trimmedPhone, code);
     console.log(
@@ -287,6 +288,11 @@ export const verifyUserSMS = async (socket, code, deviceId, phoneNumber) => {
     user.refreshTokens.push({ deviceId, token: tokenHacher });
     const isNewMember = user.isNewMember;
     user.isNewMember = false;
+    console.log(" le refresh token non crypté : " , refreshToken , " et le token " , token);
+        console.log(" voici les information sur l'appareil de user ", deviceId , " et autre token hach " ,  tokenHacher);
+
+   console.log("  voici le log du user créer  :  " , user);
+
     await user.save();
 
     socket.emit("user:created", {
