@@ -112,15 +112,19 @@ io.on("connection", async (socket) => {
   // Gestion du rafraîchissement de token
   socket.on("update:refresh_token", async (data) => {
     try {
+      console.log(" voici la data parser pour refreche le token : " , data);
       const result = await refreshUserToken({
         ...data,
       });
       if (result.error) {
         socket.emit("refresh_error", result.error);
+        console.log(" voici l'erreur prsent dans la section de la mise du token ", result.error);
       } else {
+        console.log("le token est rafraichir avec succes les gars  ", result.tokens);
         socket.emit("token_refreshed", result.tokens);
       }
     } catch (error) {
+      console.log("   je rencontre une erreur très grave  " , error);
       socket.emit("refresh_error", { code: 500, message: "Erreur serveur" });
     }
   });
