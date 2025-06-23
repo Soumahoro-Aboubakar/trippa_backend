@@ -522,6 +522,7 @@ export const updateUserProfile = async (socket, updateData) => {
 
 
 export async function handleGetUserByKSD(KSD, userId, callback) {
+  print("voici ce que le log nous donne pour voir que la voir fonctionne ksd  " , KSD , " et les uatres info " , userId)
   try {
     if (!KSD) {
       return callback({ error: "KSD manquant" });
