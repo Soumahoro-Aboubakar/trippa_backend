@@ -527,14 +527,16 @@ export const updateUserProfile = async (socket, updateData) => {
 };
 
 
-export async function handleGetUserByKSD(KSD, userId, callback) {
+export async function handleGetUserByKSD(socket, data, callback) {
+      const { KSD, userId } = data || {};
+
    console.log("voici ce que le log nous donne pour voir que la voir fonctionne ksd  " , KSD , " et les uatres info " , userId)
   try {
     if (!KSD) {
       return callback({ error: "KSD manquant" });
     }
     const filterData =
-      userId === socket.userData._id
+      userId === socket.userData?._id
         ? ""
         : "-wallet -phone -email -phone -location -lastLocation -profile.profileViewers -profile.statusViewers -statusShared";
 

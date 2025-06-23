@@ -322,8 +322,9 @@ export default function userHandlers(io, socket) {
 
   ///*****************Ce sont les événements utilisé mais qui utilisent un callBack comme paramètre */
 
-  socket.on("get_user_by_KSD", handleGetUserByKSD);
-
+socket.on("get_user_by_KSD", (data, callback) => {
+  handleGetUserByKSD(socket, data, callback);
+});
 }
 
 // Utilitaire pour rejoindre des salles géographiques
