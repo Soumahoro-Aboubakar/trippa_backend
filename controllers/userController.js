@@ -522,7 +522,7 @@ export const updateUserProfile = async (socket, updateData) => {
 
 
 export async function handleGetUserByKSD(KSD, userId, callback) {
-  print("voici ce que le log nous donne pour voir que la voir fonctionne ksd  " , KSD , " et les uatres info " , userId)
+   console.log("voici ce que le log nous donne pour voir que la voir fonctionne ksd  " , KSD , " et les uatres info " , userId)
   try {
     if (!KSD) {
       return callback({ error: "KSD manquant" });
@@ -534,10 +534,12 @@ export async function handleGetUserByKSD(KSD, userId, callback) {
 
     const user = await User.findOne({ KSD }).select(`${filterData} -refreshTokens -userKeys`);
     if (!user) {
+      console.log("erreur lors de de la recherche de l'utilissateur  Utilisateur non trouvé " )
       return callback({ error: "Utilisateur non trouvé" });
     }
     callback({ user });
   } catch (err) {
+   console.log("voici l'erreur professionnel : ", err);
     callback({ error: "Erreur serveur", details: err.message });
   }
 }
