@@ -9,18 +9,16 @@ const roomSchema = new mongoose.Schema(
       required: true,
     },
     isVerified : { type :Boolean , default : false},
-    roomAccessCode: { type: String, unique: true },
     description: { type: String, default: "" },
     members: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
     admins: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
     messageDeadline: {
       type: Date,
     }, // Date limite d'envoi de messages dans le groupe, modifiable uniquement par le créateur.
-    groupKSD: { type: String, required: true }, /// c'est un KSD (code) commençant par G- et permettant d'identifier un groupe de discussion spécifique via les champs de récherche
     isPaid: { type: Boolean, default: false },
     isPrivate: { type: Boolean, default: false }, //ici cet attribut est pour les groupes privés peux importe le nombre de membres
     isGroup: { type: Boolean, default: false }, //ici cet attribut permet de savoir s'il agit d'une commucation entre deux personnes ou un groupe
-    accessCode: { type: String, default: null }, // ici cet attribut est pour les group privés avec un code d'accès pour les membres qui veulent rejoindre le groupe
+    accessCode: { type: String, unique:true, default: null }, // ici cet attribut est pour les group privés avec un code d'accès pour les membres qui veulent rejoindre le groupe
     price: Number, // Prix de la room si elle est payante
     isActive: { type: Boolean, default: true },
     location: {
@@ -103,9 +101,32 @@ const roomSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// Index pour les recherches plus rapides
-roomSchema.index({ name: "text" });
+// Index texte amélioré pour chercher sur plusieurs champs importants
+roomSchema.index({
+  name: "text",
+  description: "text",
+});
+
+// Index géospatial
 roomSchema.index({ "location.coordinates": "2dsphere" });
+
+// Index unique pour éviter les duplications
+//roomSchema.index({ roomAccessCode: 1 }, { unique: true });
+
+// Index combinés pour filtrage rapide
+roomSchema.index({ isPrivate: 1, accessCode: 1 });
+roomSchema.index({ isGroup: 1, isVerified: 1 });
+roomSchema.index({ "wallet.balance": -1 });
+roomSchema.index({ averageRating: -1 });
+roomSchema.index({ isSearchable: 1 });
+
+// Index sur les utilisateurs bannis (utile pour vérifier accès)
+roomSchema.index({ "bannedUsers.userId": 1 });
+
+// Index sur les ratings pour stats ou tri
+roomSchema.index({ "ratings.user": 1 });
+
+
 
 const Room = mongoose.model("Room", roomSchema);
 
