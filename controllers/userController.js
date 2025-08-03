@@ -366,10 +366,7 @@ export const getUserProfile = async (socket, userId) => {
       });
       return;
     }
-    const filterData =
-      userId === socket.userData._id
-        ? ""
-        : "-wallet -phone -email -phone -location -lastLocation -profile.profileViewers -profile.statusViewers -statusShared";
+    const filterData = userDataToSelect(userId,socket.userData?._id);
 
     const user = await User.findById(userId).select(filterData);
 
@@ -526,6 +523,10 @@ export const updateUserProfile = async (socket, updateData) => {
   }
 };
 
+export const userDataToSelect = (userId1,userId2) => { 
+   if(userId1 === userId2) return "-refreshTokens -userKeys";
+   return "-wallet  -location -lastLocation -profile.profileViewers -profile.statusViewers -statusShared";
+}
 
 export async function handleGetUserByKSD(socket, data, callback) {
       const { KSD, userId } = data || {};
@@ -535,10 +536,7 @@ export async function handleGetUserByKSD(socket, data, callback) {
     if (!KSD) {
       return callback({ error: "KSD manquant" });
     }
-    const filterData =
-      userId === socket.userData?._id
-        ? ""
-        : "-wallet -phone -email -phone -location -lastLocation -profile.profileViewers -profile.statusViewers -statusShared";
+    const filterData = userDataToSelect(userId,socket.userData?._id);
 
     const user = await User.findOne({ KSD }).select(`${filterData} -refreshTokens -userKeys`);
     if (!user) {

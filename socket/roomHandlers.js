@@ -10,918 +10,909 @@ import {
   getRommByAccessCode,
 } from "../controllers/roomController.js";
 
+// Configuration des événements socket
 export function setupRoomSocket(io, socket) {
   socket.on("get_rooms_by_search", (data, callback) => {
+    handleAdvancedRoomSearch(socket, data, callback);
+  });
+
+  socket.on("get_room_by_access_code", (data, callback) => {
+    handleGetRoomByAccessCode(socket, data, callback);
+  });
+
+  socket.on("create_room", (data, callback) => {
+    handleCreateRoom(socket, data, callback);
+  });
+
+  socket.on("join_room", (data, callback) => {
+    handleJoinRoom(socket, io, data, callback);
+  });
+
+  socket.on("update_room", (data, callback) => {
+    handleUpdateRoom(socket, io, data, callback);
+  });
+
+  socket.on("leave_room", (data, callback) => {
+    handleLeaveRoom(socket, io, data, callback);
+  });
+
+  socket.on("kick_member", (data, callback) => {
+    handleKickMember(socket, io, data, callback);
+  });
+
+  socket.on("ban_member", (data, callback) => {
+    handleBanMember(socket, io, data, callback);
+  });
+
+  socket.on("add_group_admin", (data, callback) => {
+    handleAddGroupAdmin(socket, data, callback);
+  });
+
+  socket.on("find_nearby_groups", (data, callback) => {
+    handleFindNearbyGroups(socket, data, callback);
+  });
+
+  socket.on("rate_group", (data, callback) => {
+    handleRateGroup(socket, io, data, callback);
+  });
+
+  socket.on("request_room_refund", (data, callback) => {
+    handleRequestRoomRefund(socket, io, data, callback);
+  });
+}
+
+// Handlers pour chaque événement
+
+export async function handleAdvancedRoomSearch(socket, data, callback) {
+  try {
     advandedRoomSearch(data, callback);
-  });
+  } catch (error) {
+    console.log("Erreur lors de la recherche avancée:", error);
+    callback({ error: "Erreur serveur", details: error.message });
+  }
+}
 
-  socket.on("get_room_by_acces_code", (data, callback) => {
-    getRommByAccessCode(
-      {
-        ...dataParse(data),
-        userId: socket.userData?._id,
+export async function handleGetRoomByAccessCode(socket, data, callback) {
+  try {
+    const parsedData = {
+      ...dataParse(data),
+      userId: socket.userData?._id,
+    };
+    getRommByAccessCode(parsedData, callback);
+  } catch (error) {
+    console.log("Erreur lors de la récupération par code d'accès:", error);
+    callback({ error: "Erreur serveur", details: error.message });
+  }
+}
+
+export async function handleCreateRoom(socket, roomData, callback) {
+  try {
+    // Validation des données d'entrée
+    if (!socket.userData?._id) {
+      return callback({ error: "Utilisateur non authentifié" });
+    }
+
+    // Extraction et validation des paramètres
+    const {
+      isPaid = false,
+      isPrivate = false,
+      price = 0,
+      accessCode = null,
+      refundPeriodDays = 0,
+      members = [],
+      ...otherRoomData
+    } = roomData;
+
+    // Validation pour les rooms payantes
+    if (isPaid && (!price || price <= 0)) {
+      return callback({ error: "Les salles payantes doivent avoir un prix valide supérieur à 0" });
+    }
+
+    // Validation pour les rooms privées
+    if (isPrivate && !accessCode) {
+      return callback({ error: "Les salles privées doivent avoir un code d'accès" });
+    }
+
+    // Création de la nouvelle room
+    const newRoom = new Room({
+      ...otherRoomData,
+      creator: socket.userData._id,
+      members: [socket.userData._id],
+      admins: [socket.userData._id],
+      isGroup: true,
+      isPaid,
+      isPrivate,
+      price,
+      accessCode,
+      refundPeriodDays,
+      wallet: {
+        balance: 0,
+        transactions: [],
       },
-      callback
-    );
-  });
-/////////////////deux_parties
-  // Enhanced room creation with payment and privacy settings
-  socket.on("create:room", async (roomData) => {
-    try {
-      // Extract and validate payment and privacy settings
-      const {
-        isPaid = false,
-        isPrivate = false,
-        price = 0,
-        accessCode = null,
-        refundPeriodDays = 0, // Default no refund
-        members = [],
-        ...otherRoomData
-      } = roomData;
+    });
 
-      // Validate paid room data
-      if (isPaid && (!price || price <= 0)) {
-        throw new Error("Paid rooms must have a valid price greater than 0");
-      }
+    const savedRoom = await newRoom.save();
+    await savedRoom.populate("members", "username profile KSD");
+    await savedRoom.populate("admins", "username profile KSD");
 
-      // Validate private room data
-      if (isPrivate && !accessCode) {
-        throw new Error("Private rooms must have an access code");
-      }
+    // Rejoindre la room socket
+    socket.join(savedRoom._id.toString());
 
-      const newRoom = new Room({
-        ...otherRoomData,
-        creator: socket.userData._id,
-        members: [socket.userData._id],
-        admins: [socket.userData._id],
-        isGroup: true,
-        isPaid,
-        isPrivate,
-        price,
-        accessCode,
-        refundPeriodDays,
-        wallet: {
-          balance: 0,
-          transactions: [],
-        },
-      });
+    callback({ success: true, room: savedRoom });
+  } catch (error) {
+    console.log("Erreur lors de la création de la room:", error);
+    callback({ error: "Erreur lors de la création", details: error.message });
+  }
+}
 
-      const savedRoom = await newRoom.save();
-      await savedRoom.populate("members", "username profile KSD");
-      await savedRoom.populate("admins", "username profile KSD");
+export async function handleJoinRoom(socket, io, data, callback) {
+  const session = await mongoose.startSession();
+  
+  try {
+    const { roomId, accessCode, paymentMethod } = data;
 
-      socket.join(savedRoom._id.toString());
-
-      // Notify the creator
-      socket.emit("room:created:success", savedRoom);
-    } catch (error) {
-      console.log(error, " this the errors");
-      socket.emit("room:created:error", error.message);
+    if (!roomId) {
+      return callback({ error: "ID de la room manquant" });
     }
-  });
 
-  // Join a room (with payment and access code handling)
-  socket.on("join:room", async ({ roomId, accessCode, paymentMethod }) => {
-    const session = await mongoose.startSession();
-    // session.startTransaction();
-    try {
-      // Find the room
-      const room = await Room.findById(roomId).session(session);
-      if (!room) {
-        throw new Error("Room not found");
-      }
-
-      // Check if user is already a member
-      if (room.members.includes(socket.userData._id)) {
-        throw new Error("You are already a member of this room");
-      }
-
-      // Check access code for private rooms
-      if (room.isPrivate && room.accessCode !== accessCode) {
-        throw new Error("Invalid access code");
-      }
-
-      // Handle payment for paid rooms
-      if (room.isPaid) {
-        // Verify user has sufficient balance
-        const user = await User.findById(socket.userData._id)
-          .session(session)
-          .select("wallet");
-
-        if (!user || user.wallet.balance < room.price) {
-          throw new Error("Insufficient balance to join this paid room");
-        }
-
-        // Create payment record
-        const payment = new Payment({
-          user: socket.userData._id,
-          recipient: room.creator, // Room creator receives the payment
-          amount: room.price,
-          currency: "coins", // Assuming virtual currency
-          type: "room_subscription",
-          status: "completed",
-          paymentMethod,
-          relatedEntity: {
-            entityType: "room",
-            entityId: room._id,
-          },
-          refundable: true,
-          refundableBefore: room.refundPeriodDays
-            ? new Date(Date.now() + room.refundPeriodDays * 24 * 60 * 60 * 1000)
-            : null,
-        });
-
-        await payment.save({ session });
-
-        // Deduct from user's balance
-        user.wallet.balance -= room.price;
-        user.wallet.transactions.push(payment._id);
-        await user.save({ session });
-
-        // Add to room creator's balance
-        const creator = await User.findById(room.creator)
-          .session(session)
-          .select("wallet");
-
-        if (creator) {
-          creator.wallet.balance += room.price;
-          creator.wallet.transactions.push(payment._id);
-          await creator.save({ session });
-        }
-
-        // Add to room's wallet for tracking
-        room.wallet.balance += room.price;
-        room.wallet.transactions.push(payment._id);
-      }
-
-      // Add user to room members
-      room.members.push(socket.userData._id);
-      const updatedRoom = await room.save({ session });
-
-      // Commit transaction
-      // await session.commitTransaction();
-
-      // Join socket room
-      socket.join(roomId);
-
-      // Populate members data for response
-      await updatedRoom.populate("members", "username profile KSD");
-
-      // Notify user of successful join
-      socket.emit("room:joined:success", updatedRoom);
-
-      // Notify other room members
-      socket.to(roomId).emit("member:joined", {
-        //
-        roomId,
-        user: {
-          _id: socket.userData._id,
-          username: socket.userData.userName,
-          KSD: socket.userData.KSD,
-        },
-      });
-
-      //Send notifacation all users
-      // Créer les notifications en parallèle
-      const notificationPromises = room.members.map(
-        async (memberId) =>
-          await createNotification({
-            recipient: memberId,
-            type: "room_update",
-            content: {
-              title: "New Member Joined",
-              message: `${socket.userData.userName} has joined the room "${room.name}"`,
-              roomId: room._id,
-            },
-          })
-      );
-
-      // Attendre que toutes les notifications soient créées
-      const notifications = await Promise.all(notificationPromises);
-
-      // Envoyer toutes les notifications en une seule fois
-      const user = await User.findById(socket.userData._id).session(session);
-      user.rooms.push(roomId); //Ajouter la room au tableau des rooms de l'utilisateur afin de l'ajouter a la room lors de la connection en utilisant les sockets
-      user.save({ session });
-      await sendNotificationToUsers(io, notifications, global.connectedUsers);
-      // Send notification to user
-      if (room.isPaid) {
-        let notif = await createNotification({
-          recipient: socket.userData._id,
-          type: "payment_update",
-          content: {
-            title: "Room Access Purchased",
-            message: `You have successfully joined the paid room "${room.name}" for ${room.price} coins.`,
-            roomId: room._id,
-          },
-        });
-        await sendNotificationToUsers(io, [notif], global.connectedUsers);
-      }
-    } catch (error) {
-      // Rollback transaction
-      // await session.abortTransaction();
-      socket.emit("room:joined:error", {
-        code: error.message.includes("Insufficient balance")
-          ? "INSUFFICIENT_BALANCE"
-          : error.message.includes("Invalid access code")
-          ? "INVALID_ACCESS_CODE"
-          : "JOIN_FAILURE",
-        message: error.message,
-      });
-    } finally {
-      session.endSession();
+    if (!socket.userData?._id) {
+      return callback({ error: "Utilisateur non authentifié" });
     }
-  });
 
-  // Request refund for a paid room (if within refund period)
-  socket.on("request:room:refund", async ({ roomId }) => {
-    const session = await mongoose.startSession();
+    // Rechercher la room
+    const room = await Room.findById(roomId).session(session);
+    if (!room) {
+      return callback({ error: "Room non trouvée" });
+    }
 
-    try {
-      // Find relevant payment
-      const payment = await Payment.findOne({
-        user: socket.userData._id,
-        "relatedEntity.entityType": "room",
-        "relatedEntity.entityId": roomId,
-        type: "room_subscription",
-        status: "completed",
-      }).session(session);
+    // Vérifier si l'utilisateur est déjà membre
+    if (room.members.includes(socket.userData._id)) {
+      return callback({ error: "Vous êtes déjà membre de cette room" });
+    }
 
-      if (!payment) {
-        throw new Error("No refundable payment found for this room ", payment);
-      }
-      // Check if within refund period
-      if (payment.refundableBefore && new Date() > payment.refundableBefore) {
-        throw new Error("Refund period has expired");
-      }
+    // Vérifier le code d'accès pour les rooms privées
+    if (room.isPrivate && room.accessCode !== accessCode) {
+      return callback({ error: "Code d'accès invalide" });
+    }
 
-      // Find the room
-      const room = await Room.findById(roomId).session(session);
-      if (!room) {
-        throw new Error("Room not found");
-      }
-
-      // Find the user
+    // Gestion du paiement pour les rooms payantes
+    if (room.isPaid) {
       const user = await User.findById(socket.userData._id)
         .session(session)
         .select("wallet");
 
-      if (!user) {
-        throw new Error("User not found");
+      if (!user || user.wallet.balance < room.price) {
+        return callback({ error: "Solde insuffisant pour rejoindre cette room payante" });
       }
 
-      // Find the room creator
+      // Créer l'enregistrement de paiement
+      const payment = new Payment({
+        user: socket.userData._id,
+        recipient: room.creator,
+        amount: room.price,
+        currency: "coins",
+        type: "room_subscription",
+        status: "completed",
+        paymentMethod,
+        relatedEntity: {
+          entityType: "room",
+          entityId: room._id,
+        },
+        refundable: true,
+        refundableBefore: room.refundPeriodDays
+          ? new Date(Date.now() + room.refundPeriodDays * 24 * 60 * 60 * 1000)
+          : null,
+      });
+
+      await payment.save({ session });
+
+      // Déduire du solde de l'utilisateur
+      user.wallet.balance -= room.price;
+      user.wallet.transactions.push(payment._id);
+      await user.save({ session });
+
+      // Ajouter au solde du créateur
       const creator = await User.findById(room.creator)
         .session(session)
         .select("wallet");
 
-      if (!creator) {
-        throw new Error("Room owner not found");
+      if (creator) {
+        creator.wallet.balance += room.price;
+        creator.wallet.transactions.push(payment._id);
+        await creator.save({ session });
       }
 
-      // Process refund
-      // 1. Return money to user
-      user.wallet.balance += payment.amount;
+      // Ajouter au portefeuille de la room
+      room.wallet.balance += room.price;
+      room.wallet.transactions.push(payment._id);
+    }
 
-      // 2. Deduct from creator
-      creator.wallet.balance -= payment.amount;
+    // Ajouter l'utilisateur aux membres
+    room.members.push(socket.userData._id);
+    const updatedRoom = await room.save({ session });
 
-      // 3. Update room wallet
-      room.wallet.balance -= payment.amount;
+    // Rejoindre la room socket
+    socket.join(roomId);
 
-      // 4. Create refund record
-      const refund = new Payment({
-        user: creator._id,
-        recipient: socket.userData._id,
-        amount: payment.amount,
-        currency: payment.currency,
-        type: "room_refund",
-        status: "completed",
-        paymentMethod: "platform-balance",
-        relatedEntity: {
-          type: "room",
-          id: room._id,
-        },
-        originalPayment: payment._id,
-      });
+    // Peupler les données des membres
+    await updatedRoom.populate("members", "username profile KSD");
 
-      await refund.save({ session });
-
-      // Add transaction to both users' wallets
-      user.wallet.transactions.push(refund._id);
-      creator.wallet.transactions.push(refund._id);
-
-      // Mark original payment as refunded
-      payment.status = "refunded";
-      payment.refundable = false;
-
-      // Save all changes
-      await payment.save({ session });
+    // Ajouter la room à l'utilisateur
+    const user = await User.findById(socket.userData._id).session(session);
+    if (user && !user.rooms.includes(roomId)) {
+      user.rooms.push(roomId);
       await user.save({ session });
-      await creator.save({ session });
-      await room.save({ session });
+    }
 
-      // Remove user from room members
-      room.members = room.members.filter(
-        (memberId) => memberId.toString() !== socket.userData._id.toString()
-      );
-      await room.save({ session });
-
-      // Commit transaction
-      //  await session.commitTransaction();
-
-      // Leave socket room
-      socket.leave(roomId);
-      const notificationLeave = [
-        ...room.members,
-        socket.userData._id.toString(),
-      ].map(
-        async (memberId) =>
-          await createNotification({
-            recipient: memberId,
-            type: "room_update",
-            content: {
-              title: "Group Leave",
-              message: `${socket.userData.userName}(${socket.userData.KSD}) has left the room`,
-              roomId: room._id,
-            },
-          })
-      );
-      // Attendre que toutes les notifications soient créées
-      const notifications = await Promise.all(notificationLeave);
-      await sendNotificationToUsers(io, notifications, global.connectedUsers);
-
-      /// Création des 2 notifications en parallèle
-      const refundNotifications = await Promise.all([
-        createNotification({
-          recipient: socket.userData._id,
-          type: "refund_processed",
+    // Créer les notifications
+    const notificationPromises = room.members
+      .filter(memberId => memberId.toString() !== socket.userData._id.toString())
+      .map(async (memberId) =>
+        await createNotification({
+          recipient: memberId,
+          type: "room_update",
           content: {
-            title: "Room Access Purchased",
-            message: `✅ Refund Approved: Transaction #${refund._id} for "${room.name}" refunded (${room.price} coins). Check your balance updates!`,
+            title: "Nouveau membre",
+            message: `${socket.userData.userName} a rejoint la room "${room.name}"`,
             roomId: room._id,
           },
-        }),
-        createNotification({
-          recipient: room.creator,
-          type: "refund_processed",
-          content: {
-            title: "Room Access Purchased",
-            message: `⚠️ Refund Processed: ${room.price} coins have been refunded to @${socket.userData.userName}--KSD:${socket.userData.KSD} for leaving the room "${room.name}". Transaction ID: #${refund._id}. Contact support@example.com for questions.`,
-            roomId: room._id,
-          },
-        }),
-      ]);
-      await sendNotificationToUsers(
-        io,
-        refundNotifications,
-        global.connectedUsers
+        })
       );
-    } catch (error) {
-      // Rollback transaction
-      //   await session.abortTransaction();
 
-      socket.emit("room:refund:error", {
-        message: error.message,
+    const notifications = await Promise.all(notificationPromises);
+    await sendNotificationToUsers(io, notifications, global.connectedUsers);
+
+    // Notification de paiement si applicable
+    if (room.isPaid) {
+      const paymentNotif = await createNotification({
+        recipient: socket.userData._id,
+        type: "payment_update",
+        content: {
+          title: "Accès room acheté",
+          message: `Vous avez rejoint avec succès la room payante "${room.name}" pour ${room.price} coins.`,
+          roomId: room._id,
+        },
       });
-    } finally {
-      session.endSession();
+      await sendNotificationToUsers(io, [paymentNotif], global.connectedUsers);
     }
-  });
 
-  // Mise à jour des informations de la room
-  socket.on("update:room", async ({ roomId, updates }) => {
-    try {
-      const room = await Room.findById(roomId);
-      if (!room) {
-        socket.emit("room:updated:error", "Update failed or no changes made");
-        return;
-      }
+    callback({ success: true, room: updatedRoom });
+  } catch (error) {
+    console.log("Erreur lors de la jointure à la room:", error);
+    callback({ 
+      error: error.message.includes("Solde insuffisant") ? "INSUFFICIENT_BALANCE" :
+             error.message.includes("Code d'accès invalide") ? "INVALID_ACCESS_CODE" : 
+             "JOIN_FAILURE",
+      message: error.message 
+    });
+  } finally {
+    session.endSession();
+  }
+}
 
-      if (!room.admins.includes(socket.userData._id)) {
-        throw new Error("Unauthorized: Only admins can update the room");
-      }
-      const updatedRoom = await Room.findByIdAndUpdate(
-        roomId,
-        { $set: updates },
-        { new: true }
-      ).populate("members", "username profile");
-      updatedRoom.members = room.members; // Ensure members are not modified
-      updatedRoom.price =
-        socket.userData._id === room.creator ? updatedRoom.price : room.price; // Ensure price is not modified, only the creator can change it
+export async function handleUpdateRoom(socket, io, data, callback) {
+  try {
+    const { roomId, updates } = data;
 
-      // Confirmation à l'émetteur
-      socket.emit("room:updated:success", updatedRoom);
-
-      // Diffusion à la room
-      io.to(roomId).emit("room:updated", updatedRoom); //ici on prends la notification et on met tous à jour
-    } catch (error) {
-      socket.emit("room:updated:error", error.message);
+    if (!roomId || !updates) {
+      return callback({ error: "Données manquantes pour la mise à jour" });
     }
-  });
 
-  // Gestion de l'option "quitter une room"
-  socket.on("leave:room", async ({ roomId }) => {
-    const session = await mongoose.startSession();
+    if (!socket.userData?._id) {
+      return callback({ error: "Utilisateur non authentifié" });
+    }
 
-    try {
-      // Vérifier si la room existe
-      const room = await Room.findById(roomId).session(session);
-      if (!room) {
-        throw new Error("Room introuvable");
-      }
+    const room = await Room.findById(roomId);
+    if (!room) {
+      return callback({ error: "Room non trouvée" });
+    }
 
-      // Vérifier si l'utilisateur est membre de la room
-      if (
-        !room.members.some(
-          (member) => member.toString() === socket.userData._id.toString()
-        )
-      ) {
-        throw new Error("Vous n'êtes pas membre de cette room");
-      }
+    if (!room.admins.includes(socket.userData._id)) {
+      return callback({ error: "Non autorisé: Seuls les admins peuvent modifier la room" });
+    }
 
-      // Vérifier si l'utilisateur est le seul admin
-      const isAdmin = room.admins.some(
-        (admin) => admin.toString() === socket.userData._id.toString()
+    // Restrictions sur les modifications
+    const allowedUpdates = { ...updates };
+    delete allowedUpdates.members; // Les membres ne peuvent pas être modifiés via cette méthode
+    
+    // Seul le créateur peut modifier le prix
+    if (socket.userData._id.toString() !== room.creator.toString()) {
+      delete allowedUpdates.price;
+    }
+
+    const updatedRoom = await Room.findByIdAndUpdate(
+      roomId,
+      { $set: allowedUpdates },
+      { new: true }
+    ).populate("members", "username profile KSD");
+
+    // Diffuser la mise à jour
+    io.to(roomId).emit("room_updated", updatedRoom);
+
+    callback({ success: true, room: updatedRoom });
+  } catch (error) {
+    console.log("Erreur lors de la mise à jour de la room:", error);
+    callback({ error: "Erreur lors de la mise à jour", details: error.message });
+  }
+}
+
+export async function handleLeaveRoom(socket, io, data, callback) {
+  const session = await mongoose.startSession();
+
+  try {
+    const { roomId } = data;
+
+    if (!roomId) {
+      return callback({ error: "ID de la room manquant" });
+    }
+
+    if (!socket.userData?._id) {
+      return callback({ error: "Utilisateur non authentifié" });
+    }
+
+    const room = await Room.findById(roomId).session(session);
+    if (!room) {
+      return callback({ error: "Room non trouvée" });
+    }
+
+    // Vérifier si l'utilisateur est membre
+    if (!room.members.some(member => member.toString() === socket.userData._id.toString())) {
+      return callback({ error: "Vous n'êtes pas membre de cette room" });
+    }
+
+    const isAdmin = room.admins.some(admin => admin.toString() === socket.userData._id.toString());
+    const isOnlyAdmin = isAdmin && room.admins.length === 1;
+
+    // Gérer la transition d'admin si nécessaire
+    if (isOnlyAdmin && room.members.length > 1) {
+      const otherMembers = room.members.filter(
+        member => member.toString() !== socket.userData._id.toString()
       );
-      const isOnlyAdmin = isAdmin && room.admins.length === 1;
 
-      // Si c'est le seul admin et qu'il reste d'autres membres, on doit désigner un nouvel admin
-      if (isOnlyAdmin && room.members.length > 1) {
-        // Trouver un autre membre qui n'est pas admin
-        const otherMembers = room.members.filter(
-          (member) => member.toString() !== socket.userData._id.toString()
-        );
-
-        if (otherMembers.length > 0) {
-          // Désigner le premier membre comme nouvel admin
-          room.admins = [otherMembers[0]];
-          // Notifier l'utilisateur
-          socket.emit("room:left:success", {
-            roomId,
-            message: "Vous avez quitté la room avec succès",
-          });
-          // Créer une notification pour le nouvel admin
-          let adminNotification = await createNotification({
-            recipient: otherMembers[0],
-            type: "room_update",
-            content: {
-              title: "Nouveau rôle administrateur",
-              message: `Vous êtes désormais administrateur de la room "${room.name}"`,
-              roomId: room._id,
-            },
-          });
-          await sendNotificationToUsers(
-            io,
-            [adminNotification],
-            global.connectedUsers
-          );
-        }
+      if (otherMembers.length > 0) {
+        room.admins = [otherMembers[0]];
+        
+        // Notifier le nouvel admin
+        const adminNotification = await createNotification({
+          recipient: otherMembers[0],
+          type: "room_update",
+          content: {
+            title: "Nouveau rôle administrateur",
+            message: `Vous êtes désormais administrateur de la room "${room.name}"`,
+            roomId: room._id,
+          },
+        });
+        await sendNotificationToUsers(io, [adminNotification], global.connectedUsers);
       }
-      // Si c'est le dernier membre, on supprime la room
-      else if (room.members.length === 1) {
-        room.wallet.balance <= 0 &&
-          (await Room.findByIdAndDelete(roomId).session(session));
-        // Quitter la room socket
+    } else if (room.members.length === 1) {
+      // Supprimer la room si c'est le dernier membre et pas de solde
+      if (room.wallet.balance <= 0) {
+        await Room.findByIdAndDelete(roomId).session(session);
         socket.leave(roomId);
-        return;
+        return callback({ success: true, message: "Room supprimée car vous étiez le dernier membre" });
       }
-      // Sinon, si c'est un admin (mais pas le seul), on le retire des admins
-      else if (isAdmin) {
-        // Retirer l'utilisateur des admins
-        room.admins = room.admins.filter(
-          (admin) => admin.toString() !== socket.userData._id.toString()
-        );
-      }
-
-      // Retirer l'utilisateur des membres
-      room.members = room.members.filter(
-        (member) => member.toString() !== socket.userData._id.toString()
+    } else if (isAdmin) {
+      // Retirer des admins si ce n'est pas le seul
+      room.admins = room.admins.filter(
+        admin => admin.toString() !== socket.userData._id.toString()
       );
-
-      // Sauvegarder les modifications
-      await room.save({ session });
-
-      // Quitter la room socket
-      socket.leave(roomId);
-
-      // Notifier l'utilisateur
-      socket.emit("room:left:success", {
-        roomId,
-        message: "Vous avez quitté la room avec succès",
-      });
-
-      const notificationPromises = room.members.map(
-        async (memberId) =>
-          await createNotification({
-            recipient: memberId,
-            type: "room_update",
-            content: {
-              title: "Member Left",
-              message: `${socket.userData.userName}--(KSD:${socket.userData.KSD}) has left the room "${room.name}"`,
-              roomId: room._id,
-            },
-          })
-      );
-
-      // Attendre que toutes les notifications soient créées
-      const notifications = await Promise.all(notificationPromises);
-      await sendNotificationToUsers(io, notifications, global.connectedUsers);
-    } catch (error) {
-      console.log(error);
-      socket.emit("room:left:error", {
-        message: error.message,
-      });
-    } finally {
-      session.endSession();
     }
-  });
 
-  // Fonction pour expulser un membre (réservé aux admins)
-  socket.on("kick:member", async ({ roomId, userId }) => {
-    const session = await mongoose.startSession();
+    // Retirer l'utilisateur des membres
+    room.members = room.members.filter(
+      member => member.toString() !== socket.userData._id.toString()
+    );
 
-    try {
-      // Vérifier si la room existe
-      const room = await Room.findById(roomId).session(session);
-      if (!room) {
-        throw new Error("Room introuvable");
-      }
+    await room.save({ session });
 
-      // Vérifier si l'utilisateur est admin
-      if (
-        !room.admins.some(
-          (admin) => admin.toString() === socket.userData._id.toString()
-        )
-      ) {
-        throw new Error(
-          "Seuls les administrateurs peuvent expulser des membres"
-        );
-      }
+    // Quitter la room socket
+    socket.leave(roomId);
 
-      // Vérifier si le membre à expulser existe
-      if (!room.members.some((member) => member.toString() === userId)) {
-        throw new Error("Cet utilisateur n'est pas membre de la room");
-      }
-
-      // Vérifier qu'un admin n'essaie pas d'expulser un autre admin
-      if (room.admins.some((admin) => admin.toString() === userId)) {
-        throw new Error("Impossible d'expulser un administrateur");
-      }
-
-      // Retirer l'utilisateur des membres
-      room.members = room.members.filter(
-        (member) => member.toString() !== userId
-      );
-
-      // Sauvegarder les modifications
-      await room.save({ session });
-
-      // Commit de la transaction
-      const notificationPromises = room.members.map(
-        async (memberId) =>
-          await createNotification({
-            recipient: memberId,
-            type: "room_update",
-            content: {
-              title: "Member Kicked",
-              message: `${socket.userData.userName}--(KSD:${socket.userData.KSD})  has kicked from  the room "${room.name}"`,
-              roomId: room._id,
-            },
-          })
-      );
-
-      // Attendre que toutes les notifications soient créées
-      const notifications = await Promise.all(notificationPromises);
-
-      // Envoyer toutes les notifications en une seule fois
-
-      await sendNotificationToUsers(io, notifications, global.connectedUsers);
-
-      let userKickedNotification = await createNotification({
-        recipient: userId,
+    // Notifications aux autres membres
+    const notificationPromises = room.members.map(async (memberId) =>
+      await createNotification({
+        recipient: memberId,
         type: "room_update",
         content: {
-          title: "member kicked",
-          message: `Vous avez été expulsé de la room "${room.name}"`,
+          title: "Membre parti",
+          message: `${socket.userData.userName} (KSD:${socket.userData.KSD}) a quitté la room "${room.name}"`,
           roomId: room._id,
         },
-      });
+      })
+    );
 
-      await sendNotificationToUsers(
-        io,
-        [userKickedNotification],
-        global.connectedUsers
-      );
-      session.endSession();
-    } catch (error) {
-      socket.emit("member:kicked:error", {
-        message: error.message,
-      });
-    } finally {
-      session.endSession();
+    const notifications = await Promise.all(notificationPromises);
+    await sendNotificationToUsers(io, notifications, global.connectedUsers);
+
+    callback({ success: true, message: "Vous avez quitté la room avec succès" });
+  } catch (error) {
+    console.log("Erreur lors de la sortie de la room:", error);
+    callback({ error: "Erreur lors de la sortie", details: error.message });
+  } finally {
+    session.endSession();
+  }
+}
+
+export async function handleKickMember(socket, io, data, callback) {
+  const session = await mongoose.startSession();
+
+  try {
+    const { roomId, userId } = data;
+
+    if (!roomId || !userId) {
+      return callback({ error: "Données manquantes" });
     }
-  });
 
-  // Fonction pour bannir un membre (réservé aux admins)
-  socket.on("ban:member", async ({ roomId, userId, reason }) => {
-    const session = await mongoose.startSession();
+    if (!socket.userData?._id) {
+      return callback({ error: "Utilisateur non authentifié" });
+    }
 
-    try {
-      // Vérifier si la room existe
-      const room = await Room.findById(roomId).session(session);
-      if (!room) {
-        throw new Error("Room introuvable");
-      }
-      // Vérifier si l'utilisateur est admin
-      if (
-        !room.admins.some(
-          (admin) => admin.toString() === socket.userData._id.toString()
-        )
-      ) {
-        throw new Error("Seuls les administrateurs peuvent bannir des membres");
-      }
+    const room = await Room.findById(roomId).session(session);
+    if (!room) {
+      return callback({ error: "Room non trouvée" });
+    }
 
-      // Vérifier si le membre à bannir existe
-      const isMember = room.members.some(
-        (member) => member.toString() === userId
-      );
+    // Vérifier les permissions d'admin
+    if (!room.admins.some(admin => admin.toString() === socket.userData._id.toString())) {
+      return callback({ error: "Seuls les administrateurs peuvent expulser des membres" });
+    }
 
-      // Vérifier qu'un admin n'essaie pas de bannir un autre admin
-      if (room.admins.some((admin) => admin.toString() === userId)) {
-        throw new Error("Impossible de bannir un administrateur");
-      }
+    // Vérifier si l'utilisateur est membre
+    if (!room.members.some(member => member.toString() === userId)) {
+      return callback({ error: "Cet utilisateur n'est pas membre de la room" });
+    }
 
-      // Si l'utilisateur est un membre, le retirer
-      if (isMember) {
-        room.members = room.members.filter(
-          (member) => member.toString() !== userId
-        );
-      }
+    // Empêcher l'expulsion d'un admin
+    if (room.admins.some(admin => admin.toString() === userId)) {
+      return callback({ error: "Impossible d'expulser un administrateur" });
+    }
 
-      // Ajouter l'utilisateur à la liste des bannis si elle existe, sinon la créer
-      if (!room.bannedUsers) {
-        room.bannedUsers = [];
-      }
+    // Retirer l'utilisateur
+    room.members = room.members.filter(member => member.toString() !== userId);
+    await room.save({ session });
 
-      // Vérifier si l'utilisateur est déjà banni
-      if (!room.bannedUsers.some((ban) => ban.userId.toString() === userId)) {
-        room.bannedUsers.push({
-          userId,
-          bannedBy: socket.userData._id,
-          reason: reason || "Aucune raison spécifiée",
-          bannedAt: new Date(),
-        });
-      }
-
-      // Sauvegarder les modifications
-      await room.save({ session });
-
-      const notificationPromises = room.members.map(
-        async (memberId) =>
-          await createNotification({
-            recipient: memberId,
-            type: "room_update",
-            content: {
-              title: "Member Banned",
-              message: `${socket.userData.userName}--(KSD:${
-                socket.userData.KSD
-              })  has been banned from  the room "${room.name}". Raison: ${
-                reason || "Aucune raison spécifiée"
-              }`,
-              roomId: room._id,
-            },
-          })
-      );
-
-      // Attendre que toutes les notifications soient créées
-      const notifications = await Promise.all(notificationPromises);
-
-      // Envoyer toutes les notifications en une seule fois
-
-      await sendNotificationToUsers(io, notifications, global.connectedUsers);
-
-      // Créer une notification pour l'utilisateur banni
-      let userBannedNotification = await createNotification({
-        recipient: userId,
+    // Notifications
+    const notificationPromises = room.members.map(async (memberId) =>
+      await createNotification({
+        recipient: memberId,
         type: "room_update",
         content: {
-          title: "Bannissement de room",
-          message: `Vous avez été banni de la room "${room.name}". Raison: ${
-            reason || "Aucune raison spécifiée"
-          }`,
+          title: "Membre expulsé",
+          message: `Un membre a été expulsé de la room "${room.name}"`,
           roomId: room._id,
         },
-      });
-      await sendNotificationToUsers(
-        io,
-        [userBannedNotification],
-        global.connectedUsers
-      );
-    } catch (error) {
-      socket.emit("member:banned:error", {
-        message: error.message,
-      });
-    } finally {
-      session.endSession();
+      })
+    );
+
+    const kickedNotification = await createNotification({
+      recipient: userId,
+      type: "room_update",
+      content: {
+        title: "Expulsé de la room",
+        message: `Vous avez été expulsé de la room "${room.name}"`,
+        roomId: room._id,
+      },
+    });
+
+    const notifications = await Promise.all(notificationPromises);
+    await sendNotificationToUsers(io, [...notifications, kickedNotification], global.connectedUsers);
+
+    callback({ success: true, message: "Membre expulsé avec succès" });
+  } catch (error) {
+    console.log("Erreur lors de l'expulsion:", error);
+    callback({ error: "Erreur lors de l'expulsion", details: error.message });
+  } finally {
+    session.endSession();
+  }
+}
+
+export async function handleBanMember(socket, io, data, callback) {
+  const session = await mongoose.startSession();
+
+  try {
+    const { roomId, userId, reason } = data;
+
+    if (!roomId || !userId) {
+      return callback({ error: "Données manquantes" });
     }
-  });
-  // Ajouter un administrateur au groupe
-  socket.on("add-group-admin", async (data) => {
-    try {
-      console.log(data, " here  is data salt");
-      const { roomId, newAdminId } = data;
 
-      if (!roomId || !socket.userData._id || !newAdminId) {
-        return socket.emit("error", { message: "Informations incomplètes" });
-      }
-
-      // Vérifier si le groupe existe
-      const group = await Room.findById(roomId);
-      if (!group) {
-        throw new Error("Room introuvable");
-      }
-
-      // Vérifier si l'utilisateur est administrateur
-      if (!group.admins.includes(socket.userData._id)) {
-        throw new Error("Vous n'êtes pas administrateur de ce groupe");
-      }
-
-      // Vérifier si le nouvel admin est membre du groupe
-      if (!group.members.includes(newAdminId)) {
-        throw new Error("L'utilisateur n'est pas membre du groupe");
-      }
-      // Vérifier si le nouvel admin est membre du groupe
-      if (group.admins.includes(newAdminId)) {
-        throw new Error("L'utilisateur est déjà un administracteur du groupe");
-      }
-
-      // Ajouter le nouvel administrateur
-      const updatedGroup = await Room.findByIdAndUpdate(
-        roomId,
-        { $addToSet: { admins: newAdminId } },
-        { new: true }
-      );
-
-      socket.emit("admin-add-success", {
-        success: true,
-        message: "Administrateur ajouté avec succès",
-        group: updatedGroup,
-      });
-    } catch (error) {
-      console.error("Erreur lors de l'ajout d'un administrateur:", error);
-      socket.emit("error:add-group-admin", { message: error.message });
+    if (!socket.userData?._id) {
+      return callback({ error: "Utilisateur non authentifié" });
     }
-  });
-  // Rechercher des groupes à proximité
-  socket.on("find-nearby-groups", async (data) => {
-    //group = Room
-    try {
-      const { coordinates, radius = 1000, userId } = data;
 
-      if (
-        !coordinates ||
-        !Array.isArray(coordinates) ||
-        coordinates.length !== 2
-      ) {
-        return socket.emit("error", { message: "Coordonnées invalides" });
-      }
+    const room = await Room.findById(roomId).session(session);
+    if (!room) {
+      return callback({ error: "Room non trouvée" });
+    }
 
-      // Construire la requête
-      const query = {
-        "location.coordinates": {
-          $near: {
-            $geometry: {
-              type: "Point",
-              coordinates,
-            },
-            $maxDistance: radius,
+    // Vérifier les permissions
+    if (!room.admins.some(admin => admin.toString() === socket.userData._id.toString())) {
+      return callback({ error: "Seuls les administrateurs peuvent bannir des membres" });
+    }
+
+    // Empêcher le bannissement d'un admin
+    if (room.admins.some(admin => admin.toString() === userId)) {
+      return callback({ error: "Impossible de bannir un administrateur" });
+    }
+
+    // Retirer des membres s'il y est
+    const isMember = room.members.some(member => member.toString() === userId);
+    if (isMember) {
+      room.members = room.members.filter(member => member.toString() !== userId);
+    }
+
+    // Ajouter à la liste des bannis
+    if (!room.bannedUsersFromRoom) {
+      room.bannedUsersFromRoom = [];
+    }
+
+    if (!room.bannedUsersFromRoom.some(ban => ban.userId.toString() === userId)) {
+      room.bannedUsersFromRoom.push({
+        userId,
+        bannedBy: socket.userData._id,
+        reason: reason || "Aucune raison spécifiée",
+        bannedAt: new Date(),
+        isActive: true,
+      });
+    }
+
+    await room.save({ session });
+
+    // Notifications
+    const notificationPromises = room.members.map(async (memberId) =>
+      await createNotification({
+        recipient: memberId,
+        type: "room_update",
+        content: {
+          title: "Membre banni",
+          message: `Un membre a été banni de la room "${room.name}". Raison: ${reason || "Aucune raison spécifiée"}`,
+          roomId: room._id,
+        },
+      })
+    );
+
+    const bannedNotification = await createNotification({
+      recipient: userId,
+      type: "room_update",
+      content: {
+        title: "Bannissement de room",
+        message: `Vous avez été banni de la room "${room.name}". Raison: ${reason || "Aucune raison spécifiée"}`,
+        roomId: room._id,
+      },
+    });
+
+    const notifications = await Promise.all(notificationPromises);
+    await sendNotificationToUsers(io, [...notifications, bannedNotification], global.connectedUsers);
+
+    callback({ success: true, message: "Membre banni avec succès" });
+  } catch (error) {
+    console.log("Erreur lors du bannissement:", error);
+    callback({ error: "Erreur lors du bannissement", details: error.message });
+  } finally {
+    session.endSession();
+  }
+}
+
+export async function handleAddGroupAdmin(socket, data, callback) {
+  try {
+    const { roomId, newAdminId } = data;
+
+    if (!roomId || !newAdminId) {
+      return callback({ error: "Informations incomplètes" });
+    }
+
+    if (!socket.userData?._id) {
+      return callback({ error: "Utilisateur non authentifié" });
+    }
+
+    const group = await Room.findById(roomId);
+    if (!group) {
+      return callback({ error: "Room non trouvée" });
+    }
+
+    // Vérifier les permissions
+    if (!group.admins.includes(socket.userData._id)) {
+      return callback({ error: "Vous n'êtes pas administrateur de ce groupe" });
+    }
+
+    // Vérifier si l'utilisateur est membre
+    if (!group.members.includes(newAdminId)) {
+      return callback({ error: "L'utilisateur n'est pas membre du groupe" });
+    }
+
+    // Vérifier s'il n'est pas déjà admin
+    if (group.admins.includes(newAdminId)) {
+      return callback({ error: "L'utilisateur est déjà administrateur du groupe" });
+    }
+
+    const updatedGroup = await Room.findByIdAndUpdate(
+      roomId,
+      { $addToSet: { admins: newAdminId } },
+      { new: true }
+    );
+
+    callback({
+      success: true,
+      message: "Administrateur ajouté avec succès",
+      group: updatedGroup,
+    });
+  } catch (error) {
+    console.log("Erreur lors de l'ajout d'admin:", error);
+    callback({ error: "Erreur lors de l'ajout d'admin", details: error.message });
+  }
+}
+
+export async function handleFindNearbyGroups(socket, data, callback) {
+  try {
+    const { coordinates, radius = 1000, userId } = data;
+
+    if (!coordinates || !Array.isArray(coordinates) || coordinates.length !== 2) {
+      return callback({ error: "Coordonnées invalides" });
+    }
+
+    const query = {
+      "location.coordinates": {
+        $near: {
+          $geometry: {
+            type: "Point",
+            coordinates,
           },
+          $maxDistance: radius,
         },
-      };
+      },
+    };
 
-      // Exclure les groupes privés si l'utilisateur n'est pas membre
-      if (userId) {
-        query.$or = [
-          { isPrivate: false },
-          { isPrivate: true, members: userId },
-        ];
-      } else {
-        query.isPrivate = false;
-      }
+    // Gérer la visibilité
+    if (userId) {
+      query.$or = [
+        { isPrivate: false },
+        { isPrivate: true, members: userId },
+      ];
+    } else {
+      query.isPrivate = false;
+    }
 
-      const nearbyGroups = await Room.find(query)
-        .select("name description photo location members averageRating")
-        .populate("members", "userPseudo profile.photo")
-        .limit(20);
+    const nearbyGroups = await Room.find(query)
+      .select("name description photo location members averageRating")
+      .populate("members", "userPseudo profile.photo")
+      .limit(20);
 
-      socket.emit("nearby-groups", {
-        groups: nearbyGroups,
-        count: nearbyGroups.length,
-        radius,
-      });
-    } catch (error) {
-      console.error(
-        "Erreur lors de la recherche de groupes à proximité:",
-        error
-      );
-      socket.emit("error", {
-        message: "Erreur serveur lors de la recherche de groupes",
+    callback({
+      success: true,
+      groups: nearbyGroups,
+      count: nearbyGroups.length,
+      radius,
+    });
+  } catch (error) {
+    console.log("Erreur lors de la recherche de groupes à proximité:", error);
+    callback({ error: "Erreur lors de la recherche de groupes", details: error.message });
+  }
+}
+
+export async function handleRateGroup(socket, io, data, callback) {
+  try {
+    const { roomId, rating, comment = "" } = data;
+
+    if (!roomId || rating === undefined || rating < 1 || rating > 5) {
+      return callback({ error: "Informations d'évaluation invalides" });
+    }
+
+    if (!socket.userData?._id) {
+      return callback({ error: "Utilisateur non authentifié" });
+    }
+
+    const group = await Room.findById(roomId);
+    if (!group) {
+      return callback({ error: "Groupe non trouvé" });
+    }
+
+    // Vérifier l'appartenance
+    if (!group.members.includes(socket.userData._id)) {
+      return callback({ error: "Vous devez être membre du groupe pour l'évaluer" });
+    }
+
+    // Gérer l'évaluation
+    const existingRatingIndex = group.ratings.findIndex(
+      (r) => r.user && r.user.toString() === socket.userData._id.toString()
+    );
+
+    if (existingRatingIndex !== -1) {
+      // Mettre à jour
+      group.ratings[existingRatingIndex].rating = rating;
+      group.ratings[existingRatingIndex].comment = comment;
+      group.ratings[existingRatingIndex].createdAt = new Date();
+    } else {
+      // Ajouter nouveau
+      group.ratings.push({
+        user: socket.userData._id,
+        rating,
+        comment,
+        createdAt: new Date(),
       });
     }
-  });
-  // Évaluer un groupe
-  socket.on("rate-group", async (data) => {
-    //group = Room
-    try {
-      const { roomId, rating, comment = "" } = data;
 
-      if (!roomId || rating === undefined || rating < 1 || rating > 5) {
-        return socket.emit("error:rating", {
-          message: "Informations d'évaluation invalides",
-        });
-      }
-
-      // Vérifier si le groupe existe
-      const group = await Room.findById(roomId);
-      if (!group) {
-        throw new Error("Groupe introuvable");
-      }
-
-      // Vérifier si l'utilisateur est membre du groupe
-      if (!group.members.includes(socket.userData._id)) {
-        throw new Error("Vous devez être membre du groupe pour l'évaluer");
-      }
-
-      // Vérifier si l'utilisateur a déjà évalué ce groupe
-      const existingRatingIndex = group.ratings.findIndex(
-        (r) => r.user && r.user.toString() === socket.userData._id
-      );
-
-      if (existingRatingIndex !== -1) {
-        // Mettre à jour l'évaluation existante
-        group.ratings[existingRatingIndex].rating = rating;
-        group.ratings[existingRatingIndex].comment = comment;
-        group.ratings[existingRatingIndex].createdAt = new Date();
-      } else {
-        // Ajouter une nouvelle évaluation
-        group.ratings.push({
-          user: socket.userData._id,
-          rating,
-          comment,
-          createdAt: new Date(),
-        });
-      }
-
-      // Recalculer la note moyenne
-      if (group.ratings.length > 0) {
-        const totalRating = group.ratings.reduce((sum, r) => sum + r.rating, 0);
-        group.averageRating = totalRating / group.ratings.length;
-      }
-
-      const updatedGroup = await group.save();
-
-      // Notifier les administrateurs du groupe
-      const user = await User.findById(socket.userData._id).select(
-        "userPseudo"
-      );
-      if (user) {
-        const notificationPromises = group.admins.map(async (adminId) => {
-          let rate = {
-            recipient: adminId,
-            sender: socket.userData._id,
-            type: "system_notification",
-            content: {
-              title: "Nouvelle évaluation de groupe",
-              message: `${user.userPseudo} a évalué le groupe "${group.name}" (${rating}/5)`,
-              roomId: roomId,
-            },
-            relatedEntity: {
-              entityType: "Room",
-              entityId: roomId,
-            },
-            priority: "normal",
-          };
-          return await createNotification(rate);
-        });
-        // Attendre que toutes les notifications soient créées
-        const notifications = await Promise.all(notificationPromises);
-
-        // Envoyer toutes les notifications en une seule fois
-
-        await sendNotificationToUsers(io, notifications, global.connectedUsers);
-      }
-
-      socket.emit("rating-success", {
-        success: true,
-        message: "Évaluation enregistrée avec succès",
-        averageRating: updatedGroup.averageRating,
-      });
-    } catch (error) {
-      console.error("Erreur lors de l'évaluation du groupe:", error);
-      socket.emit("error:rating", {
-        message: "Erreur serveur lors de l'évaluation du groupe",
-      });
+    // Recalculer la moyenne
+    if (group.ratings.length > 0) {
+      const totalRating = group.ratings.reduce((sum, r) => sum + r.rating, 0);
+      group.averageRating = totalRating / group.ratings.length;
     }
-  });
+
+    const updatedGroup = await group.save();
+
+    // Notifier les admins
+    const user = await User.findById(socket.userData._id).select("userPseudo");
+    if (user) {
+      const notificationPromises = group.admins.map(async (adminId) => {
+        return await createNotification({
+          recipient: adminId,
+          sender: socket.userData._id,
+          type: "system_notification",
+          content: {
+            title: "Nouvelle évaluation de groupe",
+            message: `${user.userPseudo} a évalué le groupe "${group.name}" (${rating}/5)`,
+            roomId: roomId,
+          },
+          relatedEntity: {
+            entityType: "Room",
+            entityId: roomId,
+          },
+          priority: "normal",
+        });
+      });
+
+      const notifications = await Promise.all(notificationPromises);
+      await sendNotificationToUsers(io, notifications, global.connectedUsers);
+    }
+
+    callback({
+      success: true,
+      message: "Évaluation enregistrée avec succès",
+      averageRating: updatedGroup.averageRating,
+    });
+  } catch (error) {
+    console.log("Erreur lors de l'évaluation:", error);
+    callback({ error: "Erreur lors de l'évaluation du groupe", details: error.message });
+  }
+}
+
+export async function handleRequestRoomRefund(socket, io, data, callback) {
+  const session = await mongoose.startSession();
+
+  try {
+    const { roomId } = data;
+
+    if (!roomId) {
+      return callback({ error: "ID de la room manquant" });
+    }
+
+    if (!socket.userData?._id) {
+      return callback({ error: "Utilisateur non authentifié" });
+    }
+
+    // Trouver le paiement correspondant
+    const payment = await Payment.findOne({
+      user: socket.userData._id,
+      "relatedEntity.entityType": "room",
+      "relatedEntity.entityId": roomId,
+      type: "room_subscription",
+      status: "completed",
+    }).session(session);
+
+    if (!payment) {
+      return callback({ error: "Aucun paiement remboursable trouvé pour cette room" });
+    }
+
+    // Vérifier la période de remboursement
+    if (payment.refundableBefore && new Date() > payment.refundableBefore) {
+      return callback({ error: "La période de remboursement a expiré" });
+    }
+
+    const room = await Room.findById(roomId).session(session);
+    if (!room) {
+      return callback({ error: "Room non trouvée" });
+    }
+
+    const user = await User.findById(socket.userData._id).session(session).select("wallet");
+    if (!user) {
+      return callback({ error: "Utilisateur non trouvé" });
+    }
+
+    const creator = await User.findById(room.creator).session(session).select("wallet");
+    if (!creator) {
+      return callback({ error: "Propriétaire de la room non trouvé" });
+    }
+
+    // Traiter le remboursement
+    user.wallet.balance += payment.amount;
+    creator.wallet.balance -= payment.amount;
+    room.wallet.balance -= payment.amount;
+
+    // Créer l'enregistrement de remboursement
+    const refund = new Payment({
+      user: creator._id,
+      recipient: socket.userData._id,
+      amount: payment.amount,
+      currency: payment.currency,
+      type: "room_refund",
+      status: "completed",
+      paymentMethod: "platform-balance",
+      relatedEntity: {
+        entityType: "room",
+        entityId: room._id,
+      },
+      originalPayment: payment._id,
+    });
+
+    await refund.save({ session });
+
+    user.wallet.transactions.push(refund._id);
+    creator.wallet.transactions.push(refund._id);
+
+    payment.status = "refunded";
+    payment.refundable = false;
+
+    await payment.save({ session });
+    await user.save({ session });
+    await creator.save({ session });
+    await room.save({ session });
+
+    // Retirer l'utilisateur de la room
+    room.members = room.members.filter(
+      (memberId) => memberId.toString() !== socket.userData._id.toString()
+    );
+    await room.save({ session });
+
+    socket.leave(roomId);
+
+    // Notifications
+    const leaveNotifications = room.members.map(async (memberId) =>
+      await createNotification({
+        recipient: memberId,
+        type: "room_update",
+        content: {
+          title: "Membre parti",
+          message: `${socket.userData.userName}(${socket.userData.KSD}) a quitté la room après remboursement`,
+          roomId: room._id,
+        },
+      })
+    );
+
+    const refundNotifications = await Promise.all([
+      createNotification({
+        recipient: socket.userData._id,
+        type: "refund_processed",
+        content: {
+          title: "Remboursement approuvé",
+          message: `✅ Remboursement approuvé: Transaction #${refund._id} pour "${room.name}" remboursée (${room.price} coins). Vérifiez votre solde!`,
+          roomId: room._id,
+        },
+      }),
+      createNotification({
+        recipient: room.creator,
+        type: "refund_processed",
+        content: {
+          title: "Remboursement traité",
+          message: `⚠️ Remboursement traité: ${room.price} coins ont été remboursés à @${socket.userData.userName}--KSD:${socket.userData.KSD} pour avoir quitté la room "${room.name}". ID Transaction: #${refund._id}. Contactez support@example.com pour questions.`,
+          roomId: room._id,
+        },
+      }),
+    ]);
+
+    const allNotifications = await Promise.all(leaveNotifications);
+    await sendNotificationToUsers(io, [...allNotifications, ...refundNotifications], global.connectedUsers);
+
+    callback({
+      success: true,
+      message: "Remboursement traité avec succès",
+      refund: {
+        amount: payment.amount,
+        transactionId: refund._id,
+      },
+    });
+  } catch (error) {
+    console.log("Erreur lors du remboursement:", error);
+    callback({ error: "Erreur lors du remboursement", details: error.message });
+  } finally {
+    session.endSession();
+  }
 }

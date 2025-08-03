@@ -1,14 +1,15 @@
-import Alert from '../models/alert.model.js';
-import User from '../models/user.model.js';
+import Alert from "../models/alert.model.js";
+import User from "../models/user.model.js";
 //import { notifyUsersInRadius } from '../services/notificationService.js';
-import { handleMediaUpload } from '../services/mediaService.js';
-import Room from '../models/room.model.js';
-import Message from '../models/message.model.js';
-import { dataParse } from '../utils/validator.js';
-import mongoose from 'mongoose';
-import { getUserSocketId } from './UserFunctionHandler.js';
-import { getUnreadMessages } from '../services/messageService.js';
-import Notification from '../models/notification.model.js';
+import { handleMediaUpload } from "../services/mediaService.js";
+import Room from "../models/room.model.js";
+import Message from "../models/message.model.js";
+import { dataParse } from "../utils/validator.js";
+import mongoose from "mongoose";
+import { getUserSocketId } from "./UserFunctionHandler.js";
+import { getUnreadMessages } from "../services/messageService.js";
+import Notification from "../models/notification.model.js";
+import { userDataToSelect } from "../controllers/userController.js";
 const activeUploads = new Map();
 
 function generatePrivateAccessCode(userId1, userId2) {
@@ -18,20 +19,19 @@ function generatePrivateAccessCode(userId1, userId2) {
 
 // Fonction auxiliaire pour vérifier/créer la room
 
-
 export default function alertHandlers(io, socket) {
   // Créer une nouvelle alerte
-  socket.on('createAlert', async (alertData, callback) => {
+  socket.on("createAlert", async (alertData, callback) => {
     try {
       // Récupérer les informations de l'utilisateur
       const user = await User.findById(socket.userId);
       if (!user) {
-        return callback({ error: 'Utilisateur non trouvé' });
+        return callback({ error: "Utilisateur non trouvé" });
       }
 
       // Traiter le média s'il existe
       let mediaUrl = null;
-        // Créer la nouvelle alerte
+      // Créer la nouvelle alerte
       const newAlert = new Alert({
         creator: socket.userId,
         type: alertData.type,
@@ -42,7 +42,11 @@ export default function alertHandlers(io, socket) {
       });
 
       await newAlert.save();
-  io.to(`radius_${Math.floor(newAlert.location.coordinates[0])}_${Math.floor(newAlert.location.coordinates[1])}_${Math.ceil(newAlert.radius / 1000)}`).emit('newAlert', {
+      io.to(
+        `radius_${Math.floor(newAlert.location.coordinates[0])}_${Math.floor(
+          newAlert.location.coordinates[1]
+        )}_${Math.ceil(newAlert.radius / 1000)}`
+      ).emit("newAlert", {
         alertId: newAlert._id,
         type: newAlert.type,
         description: newAlert.description,
@@ -51,30 +55,34 @@ export default function alertHandlers(io, socket) {
         mediaUrl: newAlert.mediaUrl,
         creator: {
           id: user._id,
-          userPseudo: user.userPseudo
-        }
+          userPseudo: user.userPseudo,
+        },
       });
 
-      callback({ success: true, alertId: newAlert._id, notifiedUsers: notifiedUsers.length });
+      callback({
+        success: true,
+        alertId: newAlert._id,
+        notifiedUsers: notifiedUsers.length,
+      });
     } catch (error) {
-      console.error('Erreur lors de la création d\'une alerte:', error);
-      callback({ error: 'Impossible de créer l\'alerte: ' + error.message });
+      console.error("Erreur lors de la création d'une alerte:", error);
+      callback({ error: "Impossible de créer l'alerte: " + error.message });
     }
   });
 
   // Confirmer une alerte (signaler qu'elle est réelle)
-  socket.on('confirmAlert', async (data, callback) => {
+  socket.on("confirmAlert", async (data, callback) => {
     try {
       const { alertId } = data;
 
       const alert = await Alert.findById(alertId);
       if (!alert) {
-        return callback({ error: 'Alerte non trouvée' });
+        return callback({ error: "Alerte non trouvée" });
       }
 
       // Vérifier si l'utilisateur a déjà confirmé cette alerte
       const alreadyConfirmed = alert.confirmations.some(
-        confirmation => confirmation.user.toString() === socket.userId
+        (confirmation) => confirmation.user.toString() === socket.userId
       );
 
       if (!alreadyConfirmed) {
@@ -82,61 +90,68 @@ export default function alertHandlers(io, socket) {
         await alert.save();
 
         // Émettre un événement pour mettre à jour les compteurs
-        io.to(`alert_${alertId}`).emit('alertConfirmation', {
+        io.to(`alert_${alertId}`).emit("alertConfirmation", {
           alertId,
-          confirmationsCount: alert.confirmations.length
+          confirmationsCount: alert.confirmations.length,
         });
 
-        callback({ success: true, confirmationsCount: alert.confirmations.length });
+        callback({
+          success: true,
+          confirmationsCount: alert.confirmations.length,
+        });
       } else {
-        callback({ error: 'Vous avez déjà confirmé cette alerte' });
+        callback({ error: "Vous avez déjà confirmé cette alerte" });
       }
     } catch (error) {
-      console.error('Erreur lors de la confirmation d\'une alerte:', error);
-      callback({ error: 'Impossible de confirmer l\'alerte: ' + error.message });
+      console.error("Erreur lors de la confirmation d'une alerte:", error);
+      callback({ error: "Impossible de confirmer l'alerte: " + error.message });
     }
   });
 
   // S'abonner aux alertes dans une zone spécifique
-  socket.on('subscribeToAreaAlerts', async (data, callback) => {
+  socket.on("subscribeToAreaAlerts", async (data, callback) => {
     try {
       const { coordinates, radius } = data;
 
       // Valider les coordonnées
       if (!coordinates || coordinates.length !== 2 || !radius) {
-        return callback({ error: 'Coordonnées ou rayon invalides' });
+        return callback({ error: "Coordonnées ou rayon invalides" });
       }
 
       // Mettre à jour la localisation de l'utilisateur
       await User.findByIdAndUpdate(socket.userId, {
-        'lastLocation.coordinates': coordinates,
-        'lastLocation.updatedAt': new Date()
+        "lastLocation.coordinates": coordinates,
+        "lastLocation.updatedAt": new Date(),
       });
 
       // Rejoindre la salle correspondant à la zone géographique
       // Format: radius_longitude_latitude_radiusInKm
-      const roomName = `radius_${Math.floor(coordinates[0])}_${Math.floor(coordinates[1])}_${Math.ceil(radius / 1000)}`;
+      const roomName = `radius_${Math.floor(coordinates[0])}_${Math.floor(
+        coordinates[1]
+      )}_${Math.ceil(radius / 1000)}`;
       socket.join(roomName);
 
       // Récupérer les alertes actives dans cette zone
       const activeAlerts = await Alert.find({
         isActive: true,
         expireAt: { $gt: new Date() },
-        'location.coordinates': {
+        "location.coordinates": {
           $near: {
             $geometry: {
               type: "Point",
-              coordinates: coordinates
+              coordinates: coordinates,
             },
-            $maxDistance: radius
-          }
-        }
-      }).populate('creator', 'userPseudo').limit(20);
+            $maxDistance: radius,
+          },
+        },
+      })
+        .populate("creator", "userPseudo")
+        .limit(20);
 
       callback({
         success: true,
         roomName,
-        activeAlerts: activeAlerts.map(alert => ({
+        activeAlerts: activeAlerts.map((alert) => ({
           id: alert._id,
           type: alert.type,
           description: alert.description,
@@ -146,46 +161,48 @@ export default function alertHandlers(io, socket) {
           mediaUrl: alert.mediaUrl,
           creator: {
             id: alert.creator._id,
-            userPseudo: alert.creator.userPseudo
-          }
-        }))
+            userPseudo: alert.creator.userPseudo,
+          },
+        })),
       });
     } catch (error) {
-      console.error('Erreur lors de l\'abonnement aux alertes de zone:', error);
-      callback({ error: 'Impossible de s\'abonner aux alertes: ' + error.message });
+      console.error("Erreur lors de l'abonnement aux alertes de zone:", error);
+      callback({
+        error: "Impossible de s'abonner aux alertes: " + error.message,
+      });
     }
   });
 
   // Se désabonner des alertes d'une zone
-  socket.on('unsubscribeFromAreaAlerts', (data, callback) => {
+  socket.on("unsubscribeFromAreaAlerts", (data, callback) => {
     try {
       const { roomName } = data;
       socket.leave(roomName);
       callback({ success: true });
     } catch (error) {
-      callback({ error: 'Erreur lors du désabonnement: ' + error.message });
+      callback({ error: "Erreur lors du désabonnement: " + error.message });
     }
   });
 
   // Rechercher des alertes
-  socket.on('searchAlerts', async (data, callback) => {
+  socket.on("searchAlerts", async (data, callback) => {
     try {
       const { coordinates, radius, type, limit = 20 } = data;
 
       const query = {
         isActive: true,
-        expireAt: { $gt: new Date() }
+        expireAt: { $gt: new Date() },
       };
 
       if (coordinates && coordinates.length === 2) {
-        query['location.coordinates'] = {
+        query["location.coordinates"] = {
           $near: {
             $geometry: {
               type: "Point",
-              coordinates
+              coordinates,
             },
-            $maxDistance: radius || 5000 // 5km par défaut
-          }
+            $maxDistance: radius || 5000, // 5km par défaut
+          },
         };
       }
 
@@ -194,13 +211,13 @@ export default function alertHandlers(io, socket) {
       }
 
       const alerts = await Alert.find(query)
-        .populate('creator', 'userPseudo')
+        .populate("creator", "userPseudo")
         .limit(limit)
         .sort({ createdAt: -1 });
 
       callback({
         success: true,
-        alerts: alerts.map(alert => ({
+        alerts: alerts.map((alert) => ({
           id: alert._id,
           type: alert.type,
           description: alert.description,
@@ -210,32 +227,34 @@ export default function alertHandlers(io, socket) {
           mediaUrl: alert.mediaUrl,
           creator: {
             id: alert.creator._id,
-            userPseudo: alert.creator.userPseudo
-          }
-        }))
+            userPseudo: alert.creator.userPseudo,
+          },
+        })),
       });
     } catch (error) {
-      console.error('Erreur lors de la recherche d\'alertes:', error);
-      callback({ error: 'Impossible de rechercher des alertes: ' + error.message });
+      console.error("Erreur lors de la recherche d'alertes:", error);
+      callback({
+        error: "Impossible de rechercher des alertes: " + error.message,
+      });
     }
   });
 }
 
-
-
 export const socketMessageHandlers = (io, socket) => {
   async function ensureRoomExists(socket, upload) {
-
     // Si une room est déjà spécifiée, l'utiliser
     if (upload.room) {
       return { roomId: upload.room, isNew: false };
     }
 
     // Vérifier si une room privée existe déjà entre ces utilisateurs
-    const accessCode = generatePrivateAccessCode(socket.userData._id, upload.receiver);
+    const accessCode = generatePrivateAccessCode(
+      socket.userData._id,
+      upload.receiver
+    );
     const existingRoom = await Room.findOne({
       roomAccessCode: accessCode,
-      isPrivate: true
+      isPrivate: true,
     });
 
     if (existingRoom) {
@@ -248,7 +267,7 @@ export const socketMessageHandlers = (io, socket) => {
       isGroup: false,
       isPrivate: true,
       roomAccessCode: accessCode,
-      creator: socket.userData._id
+      creator: socket.userData._id,
     });
     console.log("Pendant la creation", room);
     // Sauvegarder la room et mettre à jour les utilisateurs
@@ -263,7 +282,7 @@ export const socketMessageHandlers = (io, socket) => {
         upload.receiver,
         { $push: { rooms: room._id } },
         { new: true }
-      )
+      ),
     ]);
 
     // Joindre les utilisateurs à la room
@@ -280,7 +299,7 @@ export const socketMessageHandlers = (io, socket) => {
 
     return { roomId: savedRoom._id, isNew: true };
   }
-/*  socket.on('start_upload', (metadata) => {
+  /*  socket.on('start_upload', (metadata) => {
     // Initialiser l'upload avec toutes les métadonnées nécessaires
     activeUploads.set(metadata.fileId, {
       ...metadata, // fileID, fileName, mimeType, mediaType, messageType, targetId, content, isAnonymous, totalChunks, mediaDuration
@@ -378,14 +397,16 @@ export const socketMessageHandlers = (io, socket) => {
     }
   }); */
 
-
-
-  socket.on('message:create', async (message) => {
+  socket.on("message:create", async (message) => {
     const messageData = dataParse(message);
+    if (!message) {
+      socket.emit("message:error", { error: "message incomplet" });
+      return;
+    }
     try {
       if (!message.room) {
         const roomInfo = await ensureRoomExists(socket, {
-          receiver: messageData.receiver
+          receiver: messageData.receiver,
         });
         messageData.room = roomInfo.roomId;
       }
@@ -394,21 +415,22 @@ export const socketMessageHandlers = (io, socket) => {
         sender: socket.userData._id,
         ...messageData,
       });
-
+      const filterData = userDataToSelect(messageData.sender, message.receiver);
       const savedMessage = await newMessage.save();
-      const populatedMessage = await Message.findById(savedMessage._id)
-        .populate('sender', 'userPseudo profile.photo');
-      io.to(messageData.room?.toString()).emit('new:message', populatedMessage);
-
+      const populatedMessage = await Message.findById(
+        savedMessage._id
+      ).populate([
+        { path: "sender", select: filterData },
+        { path: "receiver", select: filterData },
+      ]);
+      io.to(messageData.room?.toString()).emit("newMessage", populatedMessage);
     } catch (error) {
-      console.error('Erreur lors de l\'envoi du message texte:', error);
-      socket.emit('message:error', { error: error.message });
+      console.error("Erreur lors de l'envoi du message texte:", error);
+      socket.emit("message:error", { error: error.message });
     }
   });
 
-
-
-  socket.on('fetchNewMessages', async ({ roomId }) => {
+  socket.on("fetchNewMessages", async ({ roomId }) => {
     const roomObjectId = new mongoose.Types.ObjectId(String(roomId));
     const userId = new mongoose.Types.ObjectId(String(socket.userData._id));
 
@@ -417,74 +439,73 @@ export const socketMessageHandlers = (io, socket) => {
         {
           $match: {
             room: roomObjectId,
-            receivedBy: { $nin: [userId] }
-          }
+            receivedBy: { $nin: [userId] },
+          },
         },
         {
           $lookup: {
-            from: 'users',
-            localField: 'sender',
-            foreignField: '_id',
-            as: 'sender'
-          }
+            from: "users",
+            localField: "sender",
+            foreignField: "_id",
+            as: "sender",
+          },
         },
-        { $unwind: '$sender' },
+        { $unwind: "$sender" },
         {
           $lookup: {
-            from: 'rooms',
-            localField: 'room',
-            foreignField: '_id',
-            as: 'room'
-          }
+            from: "rooms",
+            localField: "room",
+            foreignField: "_id",
+            as: "room",
+          },
         },
-        { $unwind: '$room' },
+        { $unwind: "$room" },
         {
           $match: {
             $or: [
-              { 'room.isPrivate': false },
+              { "room.isPrivate": false },
               {
-                'room.isPrivate': true,
-                $expr: { $eq: ['$receiver', userId] }
-              }
-            ]
-          }
+                "room.isPrivate": true,
+                $expr: { $eq: ["$receiver", userId] },
+              },
+            ],
+          },
         },
         {
           $project: {
-            'sender.wallet': 0,
-            'sender.profile.profileViewers': 0,
-            'sender.profile.statusViewers': 0,
-            'sender.statusShared': 0,
-            'sender.phone': 0,
-            'sender.email': 0,
-            'room.members': 0,
-            'room.wallet': 0,
-            'receivedBy': 0,
-            'seenBy': 0
-          }
+            "sender.wallet": 0,
+            "sender.profile.profileViewers": 0,
+            "sender.profile.statusViewers": 0,
+            "sender.statusShared": 0,
+            "sender.phone": 0,
+            "sender.email": 0,
+            "room.members": 0,
+            "room.wallet": 0,
+            receivedBy: 0,
+            seenBy: 0,
+          },
         },
-        { $sort: { createdAt: 1 } }
+        { $sort: { createdAt: 1 } },
       ];
 
       const userMessages = await Message.aggregate(aggregationPipeline);
 
-      socket.emit('newMessages', userMessages);
+      socket.emit("newMessages", userMessages);
     } catch (error) {
-      console.error('Error:', error);
-      socket.emit('fetchNewMessages:error', {
+      console.error("Error:", error);
+      socket.emit("fetchNewMessages:error", {
         error: error.message,
-        code: error.code || 'DATABASE_ERROR'
+        code: error.code || "DATABASE_ERROR",
       });
     }
   });
-
 };
 
 export const initializeAuthenticatedUser = async (socket, userId) => {
   const userData = await User.findOne({ _id: userId });
 
   if (!userData) {
-    throw new Error('Utilisateur non trouvé');
+    throw new Error("Utilisateur non trouvé");
   }
 
   socket.userData = {
@@ -494,7 +515,7 @@ export const initializeAuthenticatedUser = async (socket, userId) => {
   };
 
   // Rejoindre toutes les rooms
-  userData.rooms.forEach(roomId => {
+  userData.rooms.forEach((roomId) => {
     socket.join(roomId.toString());
   });
 
@@ -513,35 +534,36 @@ export const initializeAuthenticatedUser = async (socket, userId) => {
 export const sendPendingCommunications = async (socket, userData) => {
   try {
     const [messages, notifications, groupMessages] = await Promise.all([
-      Message.find({ receiver: userData._id, status: 'SENT' }),
+      Message.find({ receiver: userData._id, status: "SENT" }),
       Notification.find({ recipient: userData._id, status: "CREATED" }),
-      getUnreadMessages(userData._id, userData.rooms)
+      getUnreadMessages(userData._id, userData.rooms),
     ]);
 
-    if (messages.length > 0) socket.emit('newMessages', messages);
-    if (notifications.length > 0) socket.emit('newNotifications', notifications);
-    if (groupMessages.length > 0) socket.emit('newGroupMessages', groupMessages);
-
+    if (messages.length > 0) socket.emit("newMessages", messages);
+    if (notifications.length > 0)
+      socket.emit("newNotifications", notifications);
+    if (groupMessages.length > 0)
+      socket.emit("newGroupMessages", groupMessages);
   } catch (error) {
-    console.error('Erreur lors de la récupération des communications:', error);
+    console.error("Erreur lors de la récupération des communications:", error);
     throw error;
   }
 };
 
 export const setupErrorHandlers = (socket) => {
-  socket.on('connect_error', (error) => {
-    console.error('Erreur de connexion:', error.message);
+  socket.on("connect_error", (error) => {
+    console.error("Erreur de connexion:", error.message);
 
-    if (error.message.includes('WebSocket')) {
-      console.log('⚠️ Échec de WebSocket - Basculement vers polling...');
+    if (error.message.includes("WebSocket")) {
+      console.log("⚠️ Échec de WebSocket - Basculement vers polling...");
     }
 
-    if (error.message.includes('timeout')) {
-      console.log('⚠️ Délai de connexion dépassé');
+    if (error.message.includes("timeout")) {
+      console.log("⚠️ Délai de connexion dépassé");
     }
   });
 
-  socket.on('reconnect', (attempt) => {
+  socket.on("reconnect", (attempt) => {
     console.log(`Reconnecté avec succès après ${attempt} tentative(s)`);
   });
   socket.on("disconnect", () => {
