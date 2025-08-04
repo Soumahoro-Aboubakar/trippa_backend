@@ -40,12 +40,6 @@ const roomSchema = new mongoose.Schema(
     
     photo: {
       type: String,
-      validate: {
-        validator: function(v) {
-          return !v || /^https?:\/\/.+\.(jpg|jpeg|png|gif|webp)$/i.test(v);
-        },
-        message: "L'URL de la photo doit être valide"
-      }
     },
 
     // Gestion des membres
@@ -183,14 +177,17 @@ const roomSchema = new mongoose.Schema(
       coordinates: {
         type: [Number], // [longitude, latitude]
         default: [0, 0],
-        validate: {
-          validator: function(v) {
-            return v.length === 2 && 
-                   v[0] >= -180 && v[0] <= 180 && // longitude
-                   v[1] >= -90 && v[1] <= 90;     // latitude
-          },
-          message: "Coordonnées invalides"
+       validate: {
+      validator: function(v) {
+        if (!v || !Array.isArray(v)) {
+          return true; 
         }
+        return v.length === 2 && 
+               v[0] >= -180 && v[0] <= 180 && // longitude
+               v[1] >= -90 && v[1] <= 90;     // latitude
+      },
+      message: "Coordonnées invalides"
+    }
       },
       address: {
         type: String,
