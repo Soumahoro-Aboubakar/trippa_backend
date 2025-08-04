@@ -84,7 +84,7 @@ export async function handleGetRoomByAccessCode(socket, data, callback) {
     callback({ error: "Erreur serveur", details: error.message });
   }
 }
-
+/*
 export async function handleCreateRoom(socket, roomData, callback) {
   try {
     // Validation des données d'entrée
@@ -142,6 +142,209 @@ export async function handleCreateRoom(socket, roomData, callback) {
   } catch (error) {
     console.log("Erreur lors de la création de la room:", error);
     callback({ error: "Erreur lors de la création", details: error.message });
+  }
+}*/
+
+/**
+ * Génère un code d'accès unique pour une room
+ * @param {number} length - Longueur du code (entre 6 et 12)
+ * @returns {string} Code d'accès aléatoire
+ */
+function generateAccessCode(length = 8) {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  let result = '';
+  for (let i = 0; i < length; i++) {
+    result += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return result;
+}
+
+/**
+ * Génère un code d'accès unique qui n'existe pas déjà en base
+ * @param {number} maxAttempts - Nombre maximum de tentatives
+ * @returns {Promise<string>} Code d'accès unique
+ */
+async function generateUniqueAccessCode(maxAttempts = 10) {
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    // Commencer avec 8 caractères, augmenter si collision
+    const codeLength = 8 + attempt;
+    const code = generateAccessCode(codeLength);
+    
+    // Vérifier si le code existe déjà
+    const existingRoom = await Room.findOne({ accessCode: code });
+    
+    if (!existingRoom) {
+      return code;
+    }
+  }
+  
+  // Si on n'arrive pas à générer un code unique après maxAttempts
+  throw new Error('Impossible de générer un code d\'accès unique');
+}
+
+/**
+ * Valide et traite les données d'entrée pour la création d'une room
+ * @param {Object} roomData - Données de la room
+ * @param {string} userId - ID de l'utilisateur créateur
+ * @returns {Object} Données validées et traitées
+ */
+async function validateAndProcessRoomData(roomData, userId) {
+  const {
+    isPaid = false,
+    isPrivate = false,
+    price = 0,
+    accessCode = null,
+    refundPeriodDays = 0,
+    members = [],
+    roomType = "private",
+    ...otherRoomData
+  } = roomData;
+
+  // Validation pour les rooms payantes
+  if (isPaid && (!price || price <= 0)) {
+    throw new Error("Les salles payantes doivent avoir un prix valide supérieur à 0");
+  }
+
+  // Validation de la période de remboursement
+  if (isPaid && (refundPeriodDays < 0 || refundPeriodDays > 30)) {
+    throw new Error("La période de remboursement doit être entre 0 et 30 jours");
+  }
+
+  // Gestion du code d'accès
+  let finalAccessCode = null;
+  
+  if (roomType != "private") {
+    if (accessCode) {
+      // Vérifier si le code fourni est déjà utilisé
+      const existingRoom = await Room.findOne({ accessCode });
+      if (existingRoom) {
+        // Générer un nouveau code si celui fourni existe déjà
+        finalAccessCode = await generateUniqueAccessCode();
+      } else {
+        // Valider le format du code fourni
+        if (!/^[A-Z0-9]{6,12}$/.test(accessCode)) {
+          throw new Error("Le code d'accès doit contenir 6-12 caractères alphanumériques majuscules");
+        }
+        finalAccessCode = accessCode;
+      }
+    } else {
+      // Générer automatiquement un code pour les rooms privées
+      finalAccessCode = await generateUniqueAccessCode();
+    }
+  }
+
+  // Traitement des membres
+  const processedMembers = members.length > 0 
+    ? [...new Set([userId, ...members.map(id => id.toString())])]
+        .map(id => new mongoose.Types.ObjectId(id))
+    : [new mongoose.Types.ObjectId(userId)];
+
+  return {
+    ...otherRoomData,
+    isPaid,
+    isPrivate: isPrivate || roomType === "private",
+    price: isPaid ? price : 0,
+    accessCode: finalAccessCode,
+    refundPeriodDays: isPaid ? refundPeriodDays : 0,
+    members: processedMembers,
+    roomType,
+    creator: new mongoose.Types.ObjectId(userId),
+    admins: [new mongoose.Types.ObjectId(userId)]
+  };
+}
+
+/**
+ * Gère la création d'une nouvelle room avec validation et génération automatique de code
+ * @param {Object} socket - Socket de l'utilisateur
+ * @param {Object} roomData - Données de la room à créer
+ * @param {Function} callback - Fonction de callback
+ */
+export async function handleCreateRoom(socket, roomData, callback) {
+  try {
+    // Validation de l'authentification
+    if (!socket.userData?._id) {
+      return callback({ 
+        error: "Utilisateur non authentifié",
+        code: "AUTH_REQUIRED"
+      });
+    }
+
+    // Validation et traitement des données
+    const processedData = await validateAndProcessRoomData(roomData, socket.userData._id);
+
+    // Création de la nouvelle room
+    const newRoom = new Room({
+      ...processedData,
+      isGroup: true,
+      wallet: {
+        balance: 0,
+        transactions: []
+      }
+    });
+
+    // Sauvegarde avec gestion des erreurs de validation Mongoose
+    const savedRoom = await newRoom.save();
+
+    // Population des références
+    await savedRoom.populate([
+      { path: "members", select: "username profile KSD" },
+      { path: "admins", select: "username profile KSD" },
+      { path: "creator", select: "username profile KSD" }
+    ]);
+
+    // Rejoindre la room socket
+    socket.join(savedRoom._id.toString());
+
+    // Log pour le suivi
+    console.log(`Room créée avec succès: ${savedRoom.name} (${savedRoom._id}) par ${socket.userData.username}`);
+    
+    // Si un nouveau code a été généré, l'indiquer dans la réponse
+    const response = {
+      success: true,
+      room: savedRoom
+    };
+
+    // Informer si le code d'accès a été modifié/généré
+    if (roomData.accessCode && roomData.accessCode !== savedRoom.accessCode) {
+      response.message = "Un nouveau code d'accès a été généré car celui fourni était déjà utilisé";
+      response.generatedAccessCode = savedRoom.accessCode;
+    } else if (!roomData.accessCode && savedRoom.accessCode) {
+      response.message = "Code d'accès généré automatiquement";
+      response.generatedAccessCode = savedRoom.accessCode;
+    }
+
+    callback(response);
+
+  } catch (error) {
+    console.error("Erreur lors de la création de la room:", {
+      error: error.message,
+      stack: error.stack,
+      roomData: { ...roomData, accessCode: '[HIDDEN]' }, // Masquer le code dans les logs
+      userId: socket.userData?._id
+    });
+
+    // Gestion des erreurs spécifiques
+    if (error.name === 'ValidationError') {
+      const validationErrors = Object.values(error.errors).map(err => err.message);
+      return callback({ 
+        error: "Données invalides", 
+        details: validationErrors,
+        code: "VALIDATION_ERROR"
+      });
+    }
+
+    if (error.code === 11000) { // Erreur de duplication MongoDB
+      return callback({ 
+        error: "Une salle avec ces caractéristiques existe déjà",
+        code: "DUPLICATE_ERROR"
+      });
+    }
+
+    callback({ 
+      error: "Erreur lors de la création de la salle", 
+      details: process.env.NODE_ENV === 'development' ? error.message : "Erreur interne",
+      code: "INTERNAL_ERROR"
+    });
   }
 }
 
