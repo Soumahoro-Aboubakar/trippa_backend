@@ -278,7 +278,72 @@ const roomSchema = new mongoose.Schema(
           default: true
         }
       }
-    ]
+    ],
+    deadlineReminderEnabled: {
+  type: Boolean,
+  default: false
+},
+
+reminderDaysBefore: {
+  type: Number,
+  default: 1,
+  min: 1,
+  max: 30,
+  validate: {
+    validator: function(v) {
+      return !this.deadlineReminderEnabled || (v && v > 0);
+    },
+    message: "Le nombre de jours de rappel est requis quand les rappels sont activés"
+  }
+},
+
+customExpirationMessage: {
+  type: String,
+  trim: true,
+  maxlength: 500,
+  default: ""
+},
+
+// 2. Configuration pour les groupes localisés
+locationRadius: {
+  type: Number,
+  min: 0,
+  validate: {
+    validator: function(v) {
+      return this.roomType !== "localisé" || (v && v > 0);
+    },
+    message: "Le rayon est requis pour les groupes localisés"
+  }
+},
+
+locationUnit: {
+  type: String,
+  enum: ["m", "km"],
+  default: "km",
+  validate: {
+    validator: function(v) {
+      return this.roomType !== "localisé" || v;
+    },
+    message: "L'unité de distance est requise pour les groupes localisés"
+  }
+},
+
+// 3. Configuration pour les groupes anonymes
+minimumAge: {
+  type: Number,
+  min: 13,
+  max: 99,
+  validate: {
+    validator: function(v) {
+      return !this.isAnonymous || !v || (v >= 13 && v <= 99);
+    },
+    message: "L'âge minimum doit être entre 13 et 99 ans"
+  }
+},
+hasAgeConstraint: {
+  type: Boolean,
+  default: false
+},
   },
   { 
     timestamps: true,
@@ -333,6 +398,82 @@ roomSchema.pre('save', function(next) {
   next();
 });
 
+
+roomSchema.pre('save', function(next) {
+  if (this.roomType === "localisé") {
+    if (!this.locationRadius || this.locationRadius <= 0) {
+      return next(new Error('Le rayon est requis pour les groupes localisés'));
+    }
+    if (!this.location || !this.location.coordinates || this.location.coordinates.length !== 2) {
+      return next(new Error('Les coordonnées sont requises pour les groupes localisés'));
+    }
+  }
+  next();
+});
+
+roomSchema.pre('save', function(next) {
+  if (this.roomType === "deadline") {
+    if (!this.messageDeadline) {
+      return next(new Error('La date d\'expiration est requise pour les groupes deadline'));
+    }
+    if (this.messageDeadline <= new Date()) {
+      return next(new Error('La date d\'expiration doit être dans le futur'));
+    }
+  }
+  next();
+});
+
+
+roomSchema.methods.isExpired = function() { // Vérifie si la deadline est expirée
+  return this.messageDeadline && this.messageDeadline <= new Date();
+};
+
+roomSchema.methods.canUserPost = function(userId) { //Vérifie si un utilisateur peut poster
+  if (this.isExpired() && this.roomType === "deadline") {
+    return this.isAdmin(userId);
+  }
+  return this.isMember(userId) && !this.isBanned(userId);
+};
+
+roomSchema.methods.getDaysUntilExpiration = function() { //Calcule les jours restants avant expiration
+  if (!this.messageDeadline) return null;
+  const now = new Date();
+  const deadline = new Date(this.messageDeadline);
+  const diffTime = deadline - now;
+  return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+};
+
+roomSchema.methods.shouldSendReminder = function() { //Détermine s'il faut envoyer un rappel
+  if (!this.deadlineReminderEnabled || !this.messageDeadline) return false;
+  const daysUntil = this.getDaysUntilExpiration();
+  return daysUntil === this.reminderDaysBefore;
+};
+
+
+roomSchema.statics.findByAccessCode = function(accessCode) {
+  return this.findOne({
+    accessCode,
+    isActive: true
+  });
+};
+
+
+roomSchema.statics.findExpiringSoon = function(days = 1) {
+  const futureDate = new Date();
+  futureDate.setDate(futureDate.getDate() + days);
+  
+  return this.find({
+    roomType: "deadline",
+    messageDeadline: {
+      $lte: futureDate,
+      $gt: new Date()
+    },
+    deadlineReminderEnabled: true,
+    isActive: true
+  });
+};
+
+
 // Index pour la recherche textuelle
 roomSchema.index({
   name: "text",
@@ -343,6 +484,11 @@ roomSchema.index({
     description: 5
   }
 });
+
+roomSchema.index({ messageDeadline: 1, deadlineReminderEnabled: 1 });
+roomSchema.index({ locationRadius: 1, locationUnit: 1 });
+roomSchema.index({ minimumAge: 1, hasAgeConstraint: 1 });
+
 
 // Index géospatial pour la localisation
 roomSchema.index({ "location.coordinates": "2dsphere" });

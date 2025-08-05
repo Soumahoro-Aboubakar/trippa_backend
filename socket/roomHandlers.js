@@ -10,8 +10,14 @@ import {
   getRommByAccessCode,
 } from "../controllers/roomController.js";
 
+const events = [
+  "create_room"
+];
+
+
 // Configuration des événements socket
 export function setupRoomSocket(io, socket) {
+  events.forEach(event => socket.removeAllListeners(event)); 
   socket.on("get_rooms_by_search", (data, callback) => {
     handleAdvancedRoomSearch(socket, data, callback);
   });
