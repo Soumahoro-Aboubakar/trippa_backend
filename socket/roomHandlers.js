@@ -18,8 +18,8 @@ const events = [
 // Configuration des événements socket
 export function setupRoomSocket(io, socket) {
   events.forEach(event => socket.removeAllListeners(event)); 
-  socket.on("get_rooms_by_search", (data, callback) => {
-    handleAdvancedRoomSearch(socket, data, callback);
+  socket.on("get_rooms_by_search", async (data, callback)  => {
+   await handleAdvancedRoomSearch(socket, data, callback);
   });
 
   socket.on("get_room_by_access_code", (data, callback) => {

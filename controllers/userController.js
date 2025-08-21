@@ -134,6 +134,7 @@ export const createUser = async (socket, userData) => {
 
       user = new User({
         phone: trimmedPhone,
+        countryCode: countryCode?.toUpperCase(),
         KSD,
         userKeys: {
           lastUserPublicKey: user?.userKeys?.currentUserPublicKey || "",
@@ -218,7 +219,13 @@ const resetLoginAttempts = (user) => {
   user.loginAttempts.lastAttemptDate = null;
 };
 
-export const verifyUserSMS = async (socket, code, deviceId, phoneNumber) => {
+export const verifyUserSMS = async (
+  socket,
+  code,
+  deviceId,
+  phoneNumber,
+  phoneHash
+) => {
   try {
     const phoneRegex = /^\+\d{7,15}(?:\s?\d+)*$/;
     if (
@@ -228,6 +235,13 @@ export const verifyUserSMS = async (socket, code, deviceId, phoneNumber) => {
     ) {
       sendVerificationError(socket, {
         message: "Numéro de téléphone invalide",
+      });
+      return;
+    }
+    if (!phoneHash || typeof phoneHash !== "string") {
+      sendVerificationError(socket, {
+        message:
+          "Le hash du numéro de téléphone est requis et doit être valide.",
       });
       return;
     }
@@ -252,6 +266,7 @@ export const verifyUserSMS = async (socket, code, deviceId, phoneNumber) => {
       return;
     }
 
+
     // Vérification du blocage temporaire
     if (isAccountBlocked(user)) {
       sendVerificationError(socket, {
@@ -262,6 +277,7 @@ export const verifyUserSMS = async (socket, code, deviceId, phoneNumber) => {
       });
       return;
     }
+
 
     // Vérification du code SMS
     if (user.verifyCode?.code !== code) {
@@ -288,19 +304,32 @@ export const verifyUserSMS = async (socket, code, deviceId, phoneNumber) => {
     user.refreshTokens.push({ deviceId, token: tokenHacher });
     const isNewMember = user.isNewMember;
     user.isNewMember = false;
-    console.log(" le refresh token non crypté : " , refreshToken , " et le token " , token);
-        console.log(" voici les information sur l'appareil de user ", deviceId , " et autre token hach " ,  tokenHacher);
+    user.phoneHash = phoneHash;
+    console.log(
+      " le refresh token non crypté : ",
+      refreshToken,
+      " et le token ",
+      token
+    );
+    console.log(
+      " voici les information sur l'appareil de user ",
+      deviceId,
+      " et autre token hach ",
+      tokenHacher
+    );
 
-   console.log("  voici le log du user créer  :  " , user);
+    console.log("  voici le log du user créer  :  ", user);
+    const filterData = userDataToSelect(user._id, user._id);
 
     await user.save();
+    const filteredUser = await User.findById(user._id).select(filterData);
 
     socket.emit("user:created", {
       message: "Votre compte a été créé avec succès",
       code: 200,
       token,
       refreshToken,
-      user,
+      user: filteredUser,
       isNewMember: isNewMember,
     });
   } catch (error) {
@@ -366,7 +395,7 @@ export const getUserProfile = async (socket, userId) => {
       });
       return;
     }
-    const filterData = userDataToSelect(userId,socket.userData?._id);
+    const filterData = userDataToSelect(userId, socket.userData?._id);
 
     const user = await User.findById(userId).select(filterData);
 
@@ -523,29 +552,43 @@ export const updateUserProfile = async (socket, updateData) => {
   }
 };
 
-export const userDataToSelect = (userId1,userId2) => { 
-   if(userId1 === userId2) return "-refreshTokens -userKeys";
-   return "-wallet  -location -lastLocation -profile.profileViewers -profile.statusViewers -statusShared";
-}
+export const userDataToSelect = (userId1, userId2) => {
+  const pairValue =
+    "-refreshTokens -userKeys  userBanned loginAttempts verifyCode";
+  if (userId1 === userId2) return pairValue;
+  return (
+    "-wallet  -location -lastLocation -profile.profileViewers -profile.statusViewers -statusShared " +
+    pairValue
+  );
+};
 
 export async function handleGetUserByKSD(socket, data, callback) {
-      const { KSD, userId } = data || {};
+  const { KSD, userId } = data || {};
 
-   console.log("voici ce que le log nous donne pour voir que la voir fonctionne ksd  " , KSD , " et les uatres info " , userId)
+  console.log(
+    "voici ce que le log nous donne pour voir que la voir fonctionne ksd  ",
+    KSD,
+    " et les uatres info ",
+    userId
+  );
   try {
     if (!KSD) {
       return callback({ error: "KSD manquant" });
     }
-    const filterData = userDataToSelect(userId,socket.userData?._id);
+    const filterData = userDataToSelect(userId, socket.userData?._id);
 
-    const user = await User.findOne({ KSD }).select(`${filterData} -refreshTokens -userKeys`);
+    const user = await User.findOne({ KSD }).select(
+      `${filterData} -refreshTokens -userKeys`
+    );
     if (!user) {
-      console.log("erreur lors de de la recherche de l'utilissateur  Utilisateur non trouvé " )
+      console.log(
+        "erreur lors de de la recherche de l'utilissateur  Utilisateur non trouvé "
+      );
       return callback({ error: "Utilisateur non trouvé" });
     }
     callback({ user });
   } catch (err) {
-   console.log("voici l'erreur professionnel : ", err);
+    console.log("voici l'erreur professionnel : ", err);
     callback({ error: "Erreur serveur", details: err.message });
   }
 }
@@ -589,6 +632,88 @@ export const getNearbyUsers = async (socket, data) => {
   } catch (error) {
     console.error("Erreur récupération utilisateurs proches:", error);
     socket.emit("nearby-users:error", { message: "Erreur serveur" });
+  }
+};
+
+export const handleSyncContacts = async (socket, data, callback) => {
+console.log("voici le log de tous les contacts  ", data);
+  try {
+    if (!socket.userData?._id) {
+      return callback({
+        error: "Utilisateur non authentifié",
+        code: "AUTH_REQUIRED",
+        success: false,
+      });
+    }
+
+    const parsedData = dataParse(data);
+    const { contactsHach } = parsedData;
+    const userId = socket.userData._id;
+
+    if (
+      !contactsHach ||
+      !Array.isArray(contactsHach) ||
+      contactsHach.length === 0
+    ) {
+      return callback({
+        success: false,
+
+        message: "Données de contacts invalides",
+        code: "INVALID_CONTACTS_DATA",
+      });
+    }
+
+    const validContactHashes = contactsHach
+      .filter((hash) => typeof hash === "string" && hash.length > 0)
+      .map((hash) => hash.trim());
+
+    if (validContactHashes.length === 0) {
+      return callback({
+        success: false,
+        message: "Aucun hash de contact valide fourni",
+        code: "NO_VALID_CONTACTS",
+      });
+    }
+
+    const filterData = userDataToSelect(userId, "randomUserId");
+
+    const appUsers = await User.find(
+      {
+        phoneHash: { $in: validContactHashes },
+        _id: { $ne: userId }, // Exclure l'utilisateur actuel
+      },
+      filterData
+    ).lean(); // Utiliser lean() pour de meilleures performances
+
+    const foundPhoneHashes = new Set(appUsers.map((user) => user.phoneHash));
+    const nonAppUsersHashes = validContactHashes.filter(
+      (hash) => !foundPhoneHashes.has(hash)
+    );
+    const resu =  {
+        appUsers: appUsers,
+        nonAppUsersCount: nonAppUsersHashes.length,
+        totalContactsProcessed: validContactHashes.length,
+        appUsersCount: appUsers.length,
+      };
+console.log("voici le log de tous les contacts  ", resu);
+
+    return callback({
+      success: true,
+      message: "Contacts synchronisés avec succès",
+      data: {
+        appUsers: appUsers,
+        nonAppUsersCount: nonAppUsersHashes.length,
+        totalContactsProcessed: validContactHashes.length,
+        appUsersCount: appUsers.length,
+      },
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("Erreur lors de la synchronisation des contacts:", error);
+    callback({
+      success: false,
+      message: "Erreur de serveur lors de la synchronisation des contacts",
+    });
   }
 };
 

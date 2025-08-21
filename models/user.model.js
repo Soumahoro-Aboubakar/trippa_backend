@@ -1,11 +1,15 @@
 import mongoose from "mongoose";
+import bcrypt from "bcrypt";
+import crypto from "crypto";
+
 const Schema = mongoose.Schema;
 const UserSchema = new Schema(
   {
     userPseudo: { type: String },
     phone: { type: String, required: true },
+    countryCode : { type: String, required: true},
     refreshTokens: [{ deviceId: String, token: String }],
-
+    phoneHash: String,
     rank: {
       type: String,
       enum: ["E", "D", "C", "B", "A", "S", "SS", "S++"],
@@ -242,5 +246,22 @@ sharedCollections: [{
 
 UserSchema.index({ "location.coordinates": "2dsphere" });
 
+/*
+UserSchema.pre('save', function(next) {
+  if (this.isModified('phone')) {
+    try {
+      const number = phoneUtil.parseAndKeepRawInput(this.phone); 
+      const normalized = phoneUtil.format(number, libphonenumber.PhoneNumberFormat.E164);
+      this.phone = normalized;
+      this.phoneHash = crypto.createHash('sha256').update(normalized).digest('hex');
+    } catch (err) {
+      console.error('Erreur de normalisation', this.phone, err);
+      next(err);
+    }
+  }
+  next();
+}); */
+
+UserSchema.index({ "phoneHash": 1 })
 const User = mongoose.model("User", UserSchema);
 export default User;
