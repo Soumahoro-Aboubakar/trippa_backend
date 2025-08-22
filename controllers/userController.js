@@ -555,7 +555,7 @@ export const updateUserProfile = async (socket, updateData) => {
 
 export const userDataToSelect = (userId1, userId2) => {
   const pairValue =
-    "-refreshTokens -userKeys  userBanned loginAttempts verifyCode";
+    "-refreshTokens -userKeys  -userBanned -loginAttempts -verifyCode";
   if (userId1 === userId2) return pairValue;
   return (
     "-wallet  -location -lastLocation -profile.profileViewers -profile.statusViewers -statusShared " +
