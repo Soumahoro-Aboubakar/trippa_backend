@@ -8,6 +8,7 @@ import dotenv from "dotenv";
 import twilio from "twilio";
 import { createNotification } from "../services/notificationService.js";
 import { hashRefreshToken } from "../services/authService.js";
+import { dataParse } from "../utils/validator.js";
 
 function isValidObjectId(id) {
   return mongoose.Types.ObjectId.isValid(id);
