@@ -690,6 +690,19 @@ console.log("voici le log de tous les contacts  ", data);
       },
       filterData
     ).lean(); // Utiliser lean() pour de meilleures performances
+console.log("userId actuel:", userId);
+console.log("_id de l'utilisateur trouvé:", user__[0]._id);
+console.log("Sont-ils égaux?", userId.toString() === user__[0]._id.toString());
+
+
+const allUsers = await User.find(
+  { phoneHash: { $in: validContactHashes } },
+  filterData
+).lean();
+
+console.log("Tous les utilisateurs trouvés:", allUsers.length);
+console.log("IDs trouvés:", allUsers.map(u => u._id.toString()));
+
 
     const foundPhoneHashes = new Set(appUsers.map((user) => user.phoneHash));
     const nonAppUsersHashes = validContactHashes.filter(
