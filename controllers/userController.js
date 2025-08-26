@@ -677,7 +677,12 @@ console.log("voici le log de tous les contacts  ", data);
     }
 
     const filterData = userDataToSelect(userId, "randomUserId");
+     if(validContactHashes.includes("683043aba393427e6f12194c824e0b981accc6a10de789fa42b07825862c50dc")){
+    console.log("Le tableau contient bien 683043aba393427e6f12194c824e0b981accc6a10de789fa42b07825862c50dc ");
+     };
 
+    const user__ =   await User.find({phoneHash : "683043aba393427e6f12194c824e0b981accc6a10de789fa42b07825862c50dc"});
+    console.log("voici le log de user__ ", user__ , " user trouver avec 683043aba393427e6f12194c824e0b981accc6a10de789fa42b07825862c50dc");
     const appUsers = await User.find(
       {
         phoneHash: { $in: validContactHashes },
