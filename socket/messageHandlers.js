@@ -449,7 +449,7 @@ export const socketMessageHandlers = (io, socket) => {
 
     // Si une room est déjà spécifiée, l'utiliser
     if (upload.room?.id) {
-      const checkRoom = await Room.findOne({ _id: upload.room.id }).lean();
+      const checkRoom = await Room.findOne({ id: upload.room.id }).lean();
       if (checkRoom) {
         const result = { roomId: upload.room.id, isNew: false };
         roomCache.set(cacheKey, result);
@@ -548,19 +548,18 @@ export const socketMessageHandlers = (io, socket) => {
       return;
     }
     try {
-      if (!message.room) {
         const roomInfo = await ensureRoomExists(socket, {
           receiver: messageData.receiver,
           room: messageData.room,
         });
 
         messageData.room = roomInfo.roomId;
-      }
 
       const newMessage = new Message({
         sender: socket.userData._id,
         ...messageData,
       });
+
       const filterData = userDataToSelect(messageData.sender, message.receiver);
       const savedMessage = await newMessage.save();
       const populatedMessage = await Message.findById(

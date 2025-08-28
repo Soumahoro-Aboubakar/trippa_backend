@@ -321,7 +321,7 @@ export async function handleCreateRoom(socket, roomData, callback) {
     socket.join(savedRoom._id.toString());
 
     // Log pour le suivi
-    console.log(`Room créée avec succès: ${savedRoom.name} (${savedRoom._id}) par ${socket.userData.username}`);
+    console.log(`Room créée avec succès:(${savedRoom._id})`);
     
     // Si un nouveau code a été généré, l'indiquer dans la réponse
     const response = {
