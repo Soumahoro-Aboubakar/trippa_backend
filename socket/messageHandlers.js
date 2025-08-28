@@ -582,6 +582,10 @@ export const socketMessageHandlers = (io, socket) => {
         { path: "receiver", select: filterData },
       ]);
       io.to(messageData.room?.toString()).emit("newMessage", populatedMessage);
+      socket.emit("message:created",{
+        code : 200,
+        message : "Message enregistré dans la db"
+      });
     } catch (error) {
       console.error("Erreur lors de l'envoi du message texte:", error);
       socket.emit("message:error", { error: error.message });
