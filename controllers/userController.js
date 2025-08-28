@@ -677,44 +677,18 @@ console.log("voici le log de tous les contacts  ", data);
     }
 
     const filterData = userDataToSelect(userId, "randomUserId");
-     if(validContactHashes.includes("683043aba393427e6f12194c824e0b981accc6a10de789fa42b07825862c50dc")){
-    console.log("Le tableau contient bien 683043aba393427e6f12194c824e0b981accc6a10de789fa42b07825862c50dc ");
-     };
-
-    const user__ =   await User.find({phoneHash : "683043aba393427e6f12194c824e0b981accc6a10de789fa42b07825862c50dc"});
-    console.log("voici le log de user__ ", user__ , " user trouver avec 683043aba393427e6f12194c824e0b981accc6a10de789fa42b07825862c50dc");
     const appUsers = await User.find(
       {
         phoneHash: { $in: validContactHashes },
-        _id: { $ne: userId }, // Exclure l'utilisateur actuel
+        _id: { $ne: new mongoose.Types.ObjectId(userId)}, // Exclure l'utilisateur actuel
       },
       filterData
     ).lean(); // Utiliser lean() pour de meilleures performances
-console.log("userId actuel:", userId);
-console.log("_id de l'utilisateur trouvé:", user__[0]._id);
-console.log("Sont-ils égaux?", userId.toString() === user__[0]._id.toString());
-
-
-const allUsers = await User.find(
-  { phoneHash: { $in: validContactHashes } },
-  filterData
-).lean();
-
-console.log("Tous les utilisateurs trouvés:", allUsers.length);
-console.log("IDs trouvés:", allUsers.map(u => u._id.toString()));
-
 
     const foundPhoneHashes = new Set(appUsers.map((user) => user.phoneHash));
     const nonAppUsersHashes = validContactHashes.filter(
       (hash) => !foundPhoneHashes.has(hash)
     );
-    const resu =  {
-        appUsers: appUsers,
-        nonAppUsersCount: nonAppUsersHashes.length,
-        totalContactsProcessed: validContactHashes.length,
-        appUsersCount: appUsers.length,
-      };
-console.log("voici le log de tous les contacts  ", resu);
 
     return callback({
       success: true,

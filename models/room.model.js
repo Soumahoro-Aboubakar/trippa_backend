@@ -24,7 +24,7 @@ const filterOptions = [
 ];
 const roomSchema = new mongoose.Schema(
   {
-    id: String,
+    id: {type : String, required : true ,  unique: true},
     // Informations de base
     name: {
       type: String,

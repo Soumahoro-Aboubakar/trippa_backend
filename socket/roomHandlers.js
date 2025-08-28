@@ -278,10 +278,29 @@ export async function handleCreateRoom(socket, roomData, callback) {
     // Validation et traitement des données
     const processedData = await validateAndProcessRoomData(roomData, socket.userData._id);
 
+    if(!processedData.id){
+      return callback({ 
+        error: "L'ID de la salle est requis",
+        code: 400,
+        success:false,
+      });
+    }
+
+    if ('_id' in processedData) delete processedData._id;
+    const checkRoom = await Room.findOne({ id: processedData.id });
+    if (checkRoom) {
+      return callback({ 
+        error: "Une salle avec cet ID existe déjà",
+        code: 409,
+        success:false,
+        room : checkRoom
+      });
+    }
+
     // Création de la nouvelle room
     const newRoom = new Room({
       ...processedData,
-      isGroup: true,
+     // isGroup: true,
       wallet: {
         balance: 0,
         transactions: []
@@ -307,7 +326,8 @@ export async function handleCreateRoom(socket, roomData, callback) {
     // Si un nouveau code a été généré, l'indiquer dans la réponse
     const response = {
       success: true,
-      room: savedRoom
+      room: savedRoom,
+      code : 200,
     };
 
     // Informer si le code d'accès a été modifié/généré

@@ -3,10 +3,10 @@ import mongoose from "mongoose";
 
 const Schema = mongoose.Schema;
 const MessageSchema = new Schema({
-    id:{type : String, required : true}, //très important pour mettre à jours le status du message côté frontend
+    id:{type : String, required : true, unique: true}, //très important pour mettre à jours le status du message côté frontend
     sender: { type: Schema.Types.ObjectId, ref: 'User', required: true },
     receiver: { type: Schema.Types.ObjectId, ref: 'User' }, // Pour messages privés
-    room: { type: Schema.Types.ObjectId, ref: 'Room' }, // Pour messages de groupe
+    room: { type: String }, // Pour messages de groupe. Pour le croisement avec la room, on utilise l'id de la room et non son _id
     content: String,
     type: { type: String, enum: ['text', 'image', 'alert', 'video', 'audio', "pdf", "documents", 'commercial'] },
     isAnonymous: Boolean,

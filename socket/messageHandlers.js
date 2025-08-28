@@ -17,6 +17,40 @@ function generatePrivateAccessCode(userId1, userId2) {
   return `${sortedIds[0]}_${sortedIds[1]}`;
 }
 
+//donne moi un fonction qui génère des code d'accès privès de taille comprise entre 6 et 12 caractères (nombre et lettres mélangées si possible) pour une room ou isGroup est true. Elle doit etre unique et non prédictible, veuillez verifier son unicité avant de la retourner
+const generateGroupAccessCode = async (accessCodePara = "") => {
+  const chars =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+
+  let accessCode = accessCodePara;
+
+  // Si on n'a pas passé de code partiel, on en génère un complet
+  if (!accessCodePara) {
+    const length = Math.floor(Math.random() * 7) + 6; // Longueur entre 6 et 12
+    for (let i = 0; i < length; i++) {
+      accessCode += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+  }
+
+  // Vérifie si ce code est déjà utilisé
+  let isUnique = false;
+  while (!isUnique) {
+    const existingRoom = await Room.findOne({ accessCode: accessCode });
+    if (!existingRoom) {
+      isUnique = true;
+    } else {
+      // Regénère un nouveau code complet si déjà existant
+      accessCode = "";
+      const length = Math.floor(Math.random() * 7) + 6;
+      for (let i = 0; i < length; i++) {
+        accessCode += chars.charAt(Math.floor(Math.random() * chars.length));
+      }
+    }
+  }
+
+  return accessCode;
+};
+
 // Fonction auxiliaire pour vérifier/créer la room
 
 export default function alertHandlers(io, socket) {
@@ -241,52 +275,58 @@ export default function alertHandlers(io, socket) {
 }
 
 export const socketMessageHandlers = (io, socket) => {
-  async function ensureRoomExists(socket, upload) {
+ /* async function ensureRoomExists(socket, upload) {
     // Si une room est déjà spécifiée, l'utiliser
-    if (upload.room) {
-      return { roomId: upload.room, isNew: false };
+    const checkRoom = await Room.findOne({ id: upload.room.id });
+    if (checkRoom) {
+      return { roomId: upload.room.id, isNew: false };
     }
 
-    // Vérifier si une room privée existe déjà entre ces utilisateurs
-    const accessCode = generatePrivateAccessCode(
-      socket.userData._id,
-      upload.receiver
-    );
-    const existingRoom = await Room.findOne({
-      roomAccessCode: accessCode,
-      isPrivate: true,
-    });
+    if (!upload.isGroup) {
+      const room = new Room({
+        members: [socket.userData._id, upload.receiver],
+        isGroup: false,
+        isPrivate: true,
+        accessCode: null,
+        creator: socket.userData._id,
+      });
+    } else {
+      const accessCode = await generateGroupAccessCode(upload.room.accessCode);
+      const room = new Room({
+        members: upload.room.members,
+        isGroup: false,
+        isPrivate: true,
+        accessCode: accessCode,
+        creator: socket.userData._id,
+      });
 
-    if (existingRoom) {
-      return { roomId: existingRoom._id, isNew: false };
+      const handleUsersRoom = async () => {
+        for (let i = 0; i < upload.room.members.length; i++) {
+          let currentUserId = upload.room.members[i];
+          User.findByIdAndUpdate(
+              currentUserId,
+            { $push: { rooms: upload.room.id} },
+            { new: true }
+          );
+        }
+      };
+      console.log("Pendant la creation", room);
+      // Sauvegarder la room et mettre à jour les utilisateurs
+      const [savedRoom, updatedSender, updatedReceiver] = await Promise.all([
+        room.save(),
+        User.findByIdAndUpdate(
+          socket.userData._id,
+          { $push: { rooms: room._id } },
+          { new: true }
+        ),
+        handleUsersRoom(),
+      ]);
     }
 
-    // Créer une nouvelle room
-    const room = new Room({
-      members: [socket.userData._id, upload.receiver],
-      isGroup: false,
-      isPrivate: true,
-      roomAccessCode: accessCode,
-      creator: socket.userData._id,
-    });
-    console.log("Pendant la creation", room);
-    // Sauvegarder la room et mettre à jour les utilisateurs
-    const [savedRoom, updatedSender, updatedReceiver] = await Promise.all([
-      room.save(),
-      User.findByIdAndUpdate(
-        socket.userData._id,
-        { $push: { rooms: room._id } },
-        { new: true }
-      ),
-      User.findByIdAndUpdate(
-        upload.receiver,
-        { $push: { rooms: room._id } },
-        { new: true }
-      ),
-    ]);
+   
 
     // Joindre les utilisateurs à la room
-    socket.join(savedRoom._id);
+  //  socket.join(savedRoom._id);
 
     // Joindre le destinataire s'il est connecté
     if (global.connectedUsers.has(upload.receiver)) {
@@ -298,7 +338,7 @@ export const socketMessageHandlers = (io, socket) => {
     }
 
     return { roomId: savedRoom._id, isNew: true };
-  }
+  } */
   /*  socket.on('start_upload', (metadata) => {
     // Initialiser l'upload avec toutes les métadonnées nécessaires
     activeUploads.set(metadata.fileId, {
@@ -397,6 +437,110 @@ export const socketMessageHandlers = (io, socket) => {
     }
   }); */
 
+   const roomCache = new Map();
+  
+    async function ensureRoomExists(socket, upload) {
+    const cacheKey = upload.room?.id || `${socket.userData._id}-${upload.receiver}`;
+    
+    // Vérifier le cache d'abord
+    if (roomCache.has(cacheKey)) {
+      return roomCache.get(cacheKey);
+    }
+
+    // Si une room est déjà spécifiée, l'utiliser
+    if (upload.room?.id) {
+      const checkRoom = await Room.findOne({ _id: upload.room.id }).lean();
+      if (checkRoom) {
+        const result = { roomId: upload.room.id, isNew: false };
+        roomCache.set(cacheKey, result);
+        return result;
+      }
+    }
+
+    let room;
+    let savedRoom;
+
+    if (!upload.isGroup) {
+      // Room privée entre deux utilisateurs
+      room = new Room({
+        ...upload.room,
+        members: [socket.userData._id, upload.receiver],
+        isGroup: false,
+        isPrivate: true,
+        accessCode: null,
+        creator: socket.userData._id,
+      });
+      
+      savedRoom = await room.save();
+
+      // Mise à jour des utilisateurs en parallèle
+      await Promise.all([
+        User.findByIdAndUpdate(
+          socket.userData._id,
+          { $addToSet: { rooms: savedRoom.id } }, // $addToSet évite les doublons
+          { new: true }
+        ).lean(),
+        User.findByIdAndUpdate(
+          upload.receiver,
+          { $addToSet: { rooms: savedRoom.id } },
+          { new: true }
+        ).lean()
+      ]);
+
+    } else {
+      // Room de groupe
+      const accessCode = await generateGroupAccessCode(upload.room.accessCode);
+      room = new Room({
+        ...upload.room,
+        members: upload.room.members,
+        isGroup: true, // Correction: doit être true pour un groupe
+       // isPrivate: true,
+        accessCode: accessCode,
+        creator: socket.userData._id,
+      });
+
+      savedRoom = await room.save();
+
+      // Mise à jour de tous les membres en parallèle avec bulkWrite pour plus d'efficacité
+      const bulkOps = upload.room.members.map(memberId => ({
+        updateOne: {
+          filter: { _id: memberId },
+          update: { $addToSet: { rooms: savedRoom.id } }
+        }
+      }));
+
+      await User.bulkWrite(bulkOps);
+    }
+
+    // Joindre les utilisateurs à la room
+    socket.join(savedRoom.id.toString());
+
+    // Joindre le destinataire/membres s'ils sont connectés
+    if (!upload.isGroup && global.connectedUsers?.has(upload.receiver)) {
+      const receiverSocketId = global.connectedUsers.get(upload.receiver);
+      const receiverSocket = io.sockets.sockets.get(receiverSocketId);
+      if (receiverSocket) {
+        receiverSocket.join(savedRoom.id.toString());
+      }
+    } else if (upload.isGroup && upload.room.members) {
+      // Pour les groupes, joindre tous les membres connectés
+      upload.room.members.forEach(memberId => {
+        if (global.connectedUsers?.has(memberId)) {
+          const memberSocketId = global.connectedUsers.get(memberId);
+          const memberSocket = io.sockets.sockets.get(memberSocketId);
+          if (memberSocket) {
+            memberSocket.join(savedRoom.id.toString());
+          }
+        }
+      });
+    }
+
+    const result = { roomId: savedRoom.id, isNew: true };
+    roomCache.set(cacheKey, result);
+    return result;
+  }
+
+
   socket.on("message:create", async (message) => {
     const messageData = dataParse(message);
     if (!message) {
@@ -407,7 +551,9 @@ export const socketMessageHandlers = (io, socket) => {
       if (!message.room) {
         const roomInfo = await ensureRoomExists(socket, {
           receiver: messageData.receiver,
+          room: messageData.room,
         });
+
         messageData.room = roomInfo.roomId;
       }
 
