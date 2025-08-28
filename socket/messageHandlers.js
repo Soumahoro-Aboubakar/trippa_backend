@@ -548,6 +548,7 @@ export const socketMessageHandlers = (io, socket) => {
       return;
     }
     try {
+      console.log("voici le message recu", messageData);
         const roomInfo = await ensureRoomExists(socket, {
           receiver: messageData.receiver,
           room: messageData.room,
