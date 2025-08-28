@@ -547,7 +547,7 @@ export const socketMessageHandlers = (io, socket) => {
       return;
     }
     try {
-          if ('_id' in messageData?.room) delete processedData?.room._id;
+          if ('_id' in messageData?.room) delete messageData?.room._id;
 
       console.log("voici le message recu", messageData);
       const roomInfo = await ensureRoomExists(socket, {
