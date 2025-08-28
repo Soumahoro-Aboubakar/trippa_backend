@@ -28,9 +28,9 @@ const roomSchema = new mongoose.Schema(
     // Informations de base
     name: {
       type: String,
-      required: true,
       trim: true,
       maxlength: 100,
+      default: "Nouvelle salle",
     },
 
     creator: {

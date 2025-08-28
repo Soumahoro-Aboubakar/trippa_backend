@@ -275,7 +275,7 @@ export default function alertHandlers(io, socket) {
 }
 
 export const socketMessageHandlers = (io, socket) => {
- /* async function ensureRoomExists(socket, upload) {
+  /* async function ensureRoomExists(socket, upload) {
     // Si une room est déjà spécifiée, l'utiliser
     const checkRoom = await Room.findOne({ id: upload.room.id });
     if (checkRoom) {
@@ -437,11 +437,12 @@ export const socketMessageHandlers = (io, socket) => {
     }
   }); */
 
-   const roomCache = new Map();
-  
-    async function ensureRoomExists(socket, upload) {
-    const cacheKey = upload.room?.id || `${socket.userData._id}-${upload.receiver}`;
-    
+  const roomCache = new Map();
+
+  async function ensureRoomExists(socket, upload) {
+    const cacheKey =
+      upload.room?.id || `${socket.userData._id}-${upload.receiver}`;
+
     // Vérifier le cache d'abord
     if (roomCache.has(cacheKey)) {
       return roomCache.get(cacheKey);
@@ -470,7 +471,7 @@ export const socketMessageHandlers = (io, socket) => {
         accessCode: null,
         creator: socket.userData._id,
       });
-      
+
       savedRoom = await room.save();
 
       // Mise à jour des utilisateurs en parallèle
@@ -484,9 +485,8 @@ export const socketMessageHandlers = (io, socket) => {
           upload.receiver,
           { $addToSet: { rooms: savedRoom.id } },
           { new: true }
-        ).lean()
+        ).lean(),
       ]);
-
     } else {
       // Room de groupe
       const accessCode = await generateGroupAccessCode(upload.room.accessCode);
@@ -494,7 +494,7 @@ export const socketMessageHandlers = (io, socket) => {
         ...upload.room,
         members: upload.room.members,
         isGroup: true, // Correction: doit être true pour un groupe
-       // isPrivate: true,
+        // isPrivate: true,
         accessCode: accessCode,
         creator: socket.userData._id,
       });
@@ -502,11 +502,11 @@ export const socketMessageHandlers = (io, socket) => {
       savedRoom = await room.save();
 
       // Mise à jour de tous les membres en parallèle avec bulkWrite pour plus d'efficacité
-      const bulkOps = upload.room.members.map(memberId => ({
+      const bulkOps = upload.room.members.map((memberId) => ({
         updateOne: {
           filter: { _id: memberId },
-          update: { $addToSet: { rooms: savedRoom.id } }
-        }
+          update: { $addToSet: { rooms: savedRoom.id } },
+        },
       }));
 
       await User.bulkWrite(bulkOps);
@@ -524,7 +524,7 @@ export const socketMessageHandlers = (io, socket) => {
       }
     } else if (upload.isGroup && upload.room.members) {
       // Pour les groupes, joindre tous les membres connectés
-      upload.room.members.forEach(memberId => {
+      upload.room.members.forEach((memberId) => {
         if (global.connectedUsers?.has(memberId)) {
           const memberSocketId = global.connectedUsers.get(memberId);
           const memberSocket = io.sockets.sockets.get(memberSocketId);
@@ -540,7 +540,6 @@ export const socketMessageHandlers = (io, socket) => {
     return result;
   }
 
-
   socket.on("message:create", async (message) => {
     const messageData = dataParse(message);
     if (!message) {
@@ -548,14 +547,27 @@ export const socketMessageHandlers = (io, socket) => {
       return;
     }
     try {
+          if ('_id' in messageData?.room) delete processedData?.room._id;
+
       console.log("voici le message recu", messageData);
-        const roomInfo = await ensureRoomExists(socket, {
-          receiver: messageData.receiver,
-          room: messageData.room,
+      const roomInfo = await ensureRoomExists(socket, {
+        receiver: messageData.receiver,
+        room: messageData.room,
+      });
+
+      messageData.room = roomInfo.roomId;
+      //verifie que le message n'existe pas déjà en base de donnée
+      const checkMessage = await Message.findOne({
+        id: messageData.id,
+      });
+      if (checkMessage) {
+        socket.emit("message:error", {
+          error: "message déjà existant",
+          code: 409,
+          status : checkMessage.status
         });
-
-        messageData.room = roomInfo.roomId;
-
+        return;
+      }
       const newMessage = new Message({
         sender: socket.userData._id,
         ...messageData,
