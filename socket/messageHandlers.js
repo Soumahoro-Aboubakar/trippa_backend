@@ -9,7 +9,10 @@ import mongoose from "mongoose";
 import { getUserSocketId } from "./UserFunctionHandler.js";
 import { getUnreadMessages } from "../services/messageService.js";
 import Notification from "../models/notification.model.js";
-import { userDataToSelect } from "../controllers/userController.js";
+import {
+  joinUserRooms,
+  userDataToSelect,
+} from "../controllers/userController.js";
 const activeUploads = new Map();
 
 function generatePrivateAccessCode(userId1, userId2) {
@@ -439,7 +442,7 @@ export const socketMessageHandlers = (io, socket) => {
 
   const roomCache = new Map();
 
-  async function ensureRoomExists(socket, upload) {
+  async function ensureRoomExists(socket, upload, session) {
     const cacheKey =
       upload.room?.id || `${socket.userData._id}-${upload.receiver}`;
 
@@ -472,7 +475,7 @@ export const socketMessageHandlers = (io, socket) => {
         creator: socket.userData._id,
       });
 
-      savedRoom = await room.save();
+      savedRoom = await room.save({ session });
 
       // Mise à jour des utilisateurs en parallèle
       await Promise.all([
@@ -480,12 +483,12 @@ export const socketMessageHandlers = (io, socket) => {
           socket.userData._id,
           { $addToSet: { rooms: savedRoom.id } }, // $addToSet évite les doublons
           { new: true }
-        ).lean(),
+        ).session(session),
         User.findByIdAndUpdate(
           upload.receiver,
           { $addToSet: { rooms: savedRoom.id } },
           { new: true }
-        ).lean(),
+        ).session(session),
       ]);
     } else {
       // Room de groupe
@@ -499,7 +502,7 @@ export const socketMessageHandlers = (io, socket) => {
         creator: socket.userData._id,
       });
 
-      savedRoom = await room.save();
+      savedRoom = await room.save({ session });
 
       // Mise à jour de tous les membres en parallèle avec bulkWrite pour plus d'efficacité
       const bulkOps = upload.room.members.map((memberId) => ({
@@ -509,7 +512,7 @@ export const socketMessageHandlers = (io, socket) => {
         },
       }));
 
-      await User.bulkWrite(bulkOps);
+      await User.bulkWrite(bulkOps, { session });
     }
 
     // Joindre les utilisateurs à la room
@@ -541,19 +544,24 @@ export const socketMessageHandlers = (io, socket) => {
   }
 
   socket.on("message:create", async (message) => {
+    const session = await mongoose.startSession();
     const messageData = dataParse(message);
     if (!message) {
       socket.emit("message:error", { error: "message incomplet" });
       return;
     }
     try {
-          if ('_id' in messageData?.room) delete messageData?.room._id;
+      if ("_id" in messageData?.room) delete messageData?.room._id;
 
       console.log("voici le message recu", messageData);
-      const roomInfo = await ensureRoomExists(socket, {
-        receiver: messageData.receiver,
-        room: messageData.room,
-      });
+      const roomInfo = await ensureRoomExists(
+        socket,
+        {
+          receiver: messageData.receiver,
+          room: messageData.room,
+        },
+        session
+      );
 
       messageData.room = roomInfo.roomId;
       //verifie que le message n'existe pas déjà en base de donnée
@@ -564,7 +572,7 @@ export const socketMessageHandlers = (io, socket) => {
         socket.emit("message:error", {
           error: "message déjà existant",
           code: 409,
-          status : checkMessage.status
+          status: checkMessage.status,
         });
         return;
       }
@@ -574,7 +582,7 @@ export const socketMessageHandlers = (io, socket) => {
       });
 
       const filterData = userDataToSelect(messageData.sender, message.receiver);
-      const savedMessage = await newMessage.save();
+      const savedMessage = await newMessage.save({ session });
       const populatedMessage = await Message.findById(
         savedMessage._id
       ).populate([
@@ -582,13 +590,15 @@ export const socketMessageHandlers = (io, socket) => {
         { path: "receiver", select: filterData },
       ]);
       io.to(messageData.room?.toString()).emit("newMessage", populatedMessage);
-      socket.emit("message:created",{
-        code : 200,
-        message : "Message enregistré dans la db"
+      socket.emit("message:created", {
+        code: 200,
+        message: "Message enregistré dans la db",
       });
     } catch (error) {
       console.error("Erreur lors de l'envoi du message texte:", error);
       socket.emit("message:error", { error: error.message });
+    } finally {
+      session.endSession();
     }
   });
 
@@ -725,7 +735,8 @@ export const setupErrorHandlers = (socket) => {
     }
   });
 
-  socket.on("reconnect", (attempt) => {
+  socket.on("reconnect", async (attempt) => {
+    await joinUserRooms(socket);
     console.log(`Reconnecté avec succès après ${attempt} tentative(s)`);
   });
   socket.on("disconnect", () => {

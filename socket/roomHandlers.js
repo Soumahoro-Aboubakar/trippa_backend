@@ -10,16 +10,13 @@ import {
   getRommByAccessCode,
 } from "../controllers/roomController.js";
 
-const events = [
-  "create_room"
-];
-
+const events = ["create_room"];
 
 // Configuration des événements socket
 export function setupRoomSocket(io, socket) {
-  events.forEach(event => socket.removeAllListeners(event)); 
-  socket.on("get_rooms_by_search", async (data, callback)  => {
-   await handleAdvancedRoomSearch(socket, data, callback);
+  events.forEach((event) => socket.removeAllListeners(event));
+  socket.on("get_rooms_by_search", async (data, callback) => {
+    await handleAdvancedRoomSearch(socket, data, callback);
   });
 
   socket.on("get_room_by_access_code", (data, callback) => {
@@ -157,8 +154,8 @@ export async function handleCreateRoom(socket, roomData, callback) {
  * @returns {string} Code d'accès aléatoire
  */
 function generateAccessCode(length = 8) {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-  let result = '';
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  let result = "";
   for (let i = 0; i < length; i++) {
     result += chars.charAt(Math.floor(Math.random() * chars.length));
   }
@@ -175,17 +172,17 @@ async function generateUniqueAccessCode(maxAttempts = 10) {
     // Commencer avec 8 caractères, augmenter si collision
     const codeLength = 8 + attempt;
     const code = generateAccessCode(codeLength);
-    
+
     // Vérifier si le code existe déjà
     const existingRoom = await Room.findOne({ accessCode: code });
-    
+
     if (!existingRoom) {
       return code;
     }
   }
-  
+
   // Si on n'arrive pas à générer un code unique après maxAttempts
-  throw new Error('Impossible de générer un code d\'accès unique');
+  throw new Error("Impossible de générer un code d'accès unique");
 }
 
 /**
@@ -208,17 +205,21 @@ async function validateAndProcessRoomData(roomData, userId) {
 
   // Validation pour les rooms payantes
   if (isPaid && (!price || price <= 0)) {
-    throw new Error("Les salles payantes doivent avoir un prix valide supérieur à 0");
+    throw new Error(
+      "Les salles payantes doivent avoir un prix valide supérieur à 0"
+    );
   }
 
   // Validation de la période de remboursement
   if (isPaid && (refundPeriodDays < 0 || refundPeriodDays > 30)) {
-    throw new Error("La période de remboursement doit être entre 0 et 30 jours");
+    throw new Error(
+      "La période de remboursement doit être entre 0 et 30 jours"
+    );
   }
 
   // Gestion du code d'accès
   let finalAccessCode = null;
-  
+
   if (roomType != "private") {
     if (accessCode) {
       // Vérifier si le code fourni est déjà utilisé
@@ -229,7 +230,9 @@ async function validateAndProcessRoomData(roomData, userId) {
       } else {
         // Valider le format du code fourni
         if (!/^[A-Z0-9]{6,12}$/.test(accessCode)) {
-          throw new Error("Le code d'accès doit contenir 6-12 caractères alphanumériques majuscules");
+          throw new Error(
+            "Le code d'accès doit contenir 6-12 caractères alphanumériques majuscules"
+          );
         }
         finalAccessCode = accessCode;
       }
@@ -240,10 +243,12 @@ async function validateAndProcessRoomData(roomData, userId) {
   }
 
   // Traitement des membres
-  const processedMembers = members.length > 0 
-    ? [...new Set([userId, ...members.map(id => id.toString())])]
-        .map(id => new mongoose.Types.ObjectId(id))
-    : [new mongoose.Types.ObjectId(userId)];
+  const processedMembers =
+    members.length > 0
+      ? [...new Set([userId, ...members.map((id) => id.toString())])].map(
+          (id) => new mongoose.Types.ObjectId(id)
+        )
+      : [new mongoose.Types.ObjectId(userId)];
 
   return {
     ...otherRoomData,
@@ -255,7 +260,7 @@ async function validateAndProcessRoomData(roomData, userId) {
     members: processedMembers,
     roomType,
     creator: new mongoose.Types.ObjectId(userId),
-    admins: [new mongoose.Types.ObjectId(userId)]
+    admins: [new mongoose.Types.ObjectId(userId)],
   };
 }
 
@@ -265,118 +270,140 @@ async function validateAndProcessRoomData(roomData, userId) {
  * @param {Object} roomData - Données de la room à créer
  * @param {Function} callback - Fonction de callback
  */
+
 export async function handleCreateRoom(socket, roomData, callback) {
+  const session = await mongoose.startSession();
+
   try {
-    // Validation de l'authentification
-    if (!socket.userData?._id) {
-      return callback({ 
+    // Vérification de l'authentification de l'utilisateur
+    const userId = socket?.userData?._id;
+    if (!userId) {
+      return callback({
         error: "Utilisateur non authentifié",
-        code: "AUTH_REQUIRED"
+        code: "AUTH_REQUIRED",
       });
     }
 
-    // Validation et traitement des données
-    const processedData = await validateAndProcessRoomData(roomData, socket.userData._id);
+    // Traitement et validation des données de la salle
+    const processedData = await validateAndProcessRoomData(roomData, userId);
 
-    if(!processedData.id){
-      return callback({ 
+    if (!processedData.id) {
+      return callback({
         error: "L'ID de la salle est requis",
         code: 400,
-        success:false,
+        success: false,
       });
     }
 
-    if ('_id' in processedData) delete processedData._id;
-    const checkRoom = await Room.findOne({ id: processedData.id });
-    if (checkRoom) {
-      return callback({ 
+    // Vérification de l'existence d'une salle avec le même ID
+    const existingRoom = await Room.findOne({ id: processedData.id });
+    if (existingRoom) {
+      return callback({
         error: "Une salle avec cet ID existe déjà",
         code: 409,
-        success:false,
-        room : checkRoom
+        success: false,
+        room: existingRoom,
       });
     }
 
-    // Création de la nouvelle room
+    // Création de la nouvelle salle
     const newRoom = new Room({
       ...processedData,
-     // isGroup: true,
       wallet: {
         balance: 0,
-        transactions: []
-      }
+        transactions: [],
+      },
     });
 
-    // Sauvegarde avec gestion des erreurs de validation Mongoose
-    const savedRoom = await newRoom.save();
+    // Sauvegarde de la salle dans la base de données avec session
+    const savedRoom = await newRoom.save({ session });
 
     // Population des références
     await savedRoom.populate([
       { path: "members", select: "username profile KSD" },
       { path: "admins", select: "username profile KSD" },
-      { path: "creator", select: "username profile KSD" }
+      { path: "creator", select: "username profile KSD" },
     ]);
 
-    // Rejoindre la room socket
+    // Ajout de la salle à la liste des rooms de l'utilisateur
+    const user = await User.findById(userId).session(session);
+    if (!user) {
+      return callback({
+        error: "Utilisateur introuvable",
+        code: "INTERNAL_ERROR",
+      });
+    }
+
+    user.rooms.push(processedData.id);
+    await user.save({ session });
+
+    // Connexion du socket à la nouvelle salle
     socket.join(savedRoom._id.toString());
 
-    // Log pour le suivi
-    console.log(`Room créée avec succès:(${savedRoom._id})`);
-    
-    // Si un nouveau code a été généré, l'indiquer dans la réponse
+    // Création de la réponse
     const response = {
       success: true,
+      code: 200,
       room: savedRoom,
-      code : 200,
     };
 
-    // Informer si le code d'accès a été modifié/généré
+    // Informations sur le code d'accès généré
     if (roomData.accessCode && roomData.accessCode !== savedRoom.accessCode) {
-      response.message = "Un nouveau code d'accès a été généré car celui fourni était déjà utilisé";
+      response.message =
+        "Un nouveau code d'accès a été généré car celui fourni était déjà utilisé";
       response.generatedAccessCode = savedRoom.accessCode;
     } else if (!roomData.accessCode && savedRoom.accessCode) {
       response.message = "Code d'accès généré automatiquement";
       response.generatedAccessCode = savedRoom.accessCode;
     }
 
+    console.log(`✅ Room créée avec succès: (${savedRoom._id})`);
     callback(response);
-
   } catch (error) {
-    console.error("Erreur lors de la création de la room:", {
-      error: error.message,
+    console.error("❌ Erreur lors de la création de la room:", {
+      message: error.message,
       stack: error.stack,
-      roomData: { ...roomData, accessCode: '[HIDDEN]' }, // Masquer le code dans les logs
-      userId: socket.userData?._id
+      roomData: { ...roomData, accessCode: "[HIDDEN]" },
+      userId: socket?.userData?._id,
     });
 
-    // Gestion des erreurs spécifiques
-    if (error.name === 'ValidationError') {
-      const validationErrors = Object.values(error.errors).map(err => err.message);
-      return callback({ 
-        error: "Données invalides", 
+    // Gestion des erreurs de validation mongoose
+    if (error.name === "ValidationError") {
+      const validationErrors = Object.values(error.errors).map(
+        (err) => err.message
+      );
+      return callback({
+        error: "Données invalides",
         details: validationErrors,
-        code: "VALIDATION_ERROR"
+        code: "VALIDATION_ERROR",
       });
     }
 
-    if (error.code === 11000) { // Erreur de duplication MongoDB
-      return callback({ 
+    // Gestion des erreurs de duplication MongoDB
+    if (error.code === 11000) {
+      return callback({
         error: "Une salle avec ces caractéristiques existe déjà",
-        code: "DUPLICATE_ERROR"
+        code: "DUPLICATE_ERROR",
       });
     }
 
-    callback({ 
-      error: "Erreur lors de la création de la salle", 
-      details: process.env.NODE_ENV === 'development' ? error.message : "Erreur interne",
-      code: "INTERNAL_ERROR"
+    // Erreur générique
+    callback({
+      error: "Erreur lors de la création de la salle",
+      details:
+        process.env.NODE_ENV === "development"
+          ? error.message
+          : "Erreur interne",
+      code: "INTERNAL_ERROR",
     });
+  } finally {
+    session.endSession();
   }
 }
 
 export async function handleJoinRoom(socket, io, data, callback) {
   const session = await mongoose.startSession();
-  
+
   try {
     const { roomId, accessCode, paymentMethod } = data;
 
@@ -411,7 +438,9 @@ export async function handleJoinRoom(socket, io, data, callback) {
         .select("wallet");
 
       if (!user || user.wallet.balance < room.price) {
-        return callback({ error: "Solde insuffisant pour rejoindre cette room payante" });
+        return callback({
+          error: "Solde insuffisant pour rejoindre cette room payante",
+        });
       }
 
       // Créer l'enregistrement de paiement
@@ -475,17 +504,20 @@ export async function handleJoinRoom(socket, io, data, callback) {
 
     // Créer les notifications
     const notificationPromises = room.members
-      .filter(memberId => memberId.toString() !== socket.userData._id.toString())
-      .map(async (memberId) =>
-        await createNotification({
-          recipient: memberId,
-          type: "room_update",
-          content: {
-            title: "Nouveau membre",
-            message: `${socket.userData.userName} a rejoint la room "${room.name}"`,
-            roomId: room._id,
-          },
-        })
+      .filter(
+        (memberId) => memberId.toString() !== socket.userData._id.toString()
+      )
+      .map(
+        async (memberId) =>
+          await createNotification({
+            recipient: memberId,
+            type: "room_update",
+            content: {
+              title: "Nouveau membre",
+              message: `${socket.userData.userName} a rejoint la room "${room.name}"`,
+              roomId: room._id,
+            },
+          })
       );
 
     const notifications = await Promise.all(notificationPromises);
@@ -508,11 +540,13 @@ export async function handleJoinRoom(socket, io, data, callback) {
     callback({ success: true, room: updatedRoom });
   } catch (error) {
     console.log("Erreur lors de la jointure à la room:", error);
-    callback({ 
-      error: error.message.includes("Solde insuffisant") ? "INSUFFICIENT_BALANCE" :
-             error.message.includes("Code d'accès invalide") ? "INVALID_ACCESS_CODE" : 
-             "JOIN_FAILURE",
-      message: error.message 
+    callback({
+      error: error.message.includes("Solde insuffisant")
+        ? "INSUFFICIENT_BALANCE"
+        : error.message.includes("Code d'accès invalide")
+        ? "INVALID_ACCESS_CODE"
+        : "JOIN_FAILURE",
+      message: error.message,
     });
   } finally {
     session.endSession();
@@ -537,13 +571,15 @@ export async function handleUpdateRoom(socket, io, data, callback) {
     }
 
     if (!room.admins.includes(socket.userData._id)) {
-      return callback({ error: "Non autorisé: Seuls les admins peuvent modifier la room" });
+      return callback({
+        error: "Non autorisé: Seuls les admins peuvent modifier la room",
+      });
     }
 
     // Restrictions sur les modifications
     const allowedUpdates = { ...updates };
     delete allowedUpdates.members; // Les membres ne peuvent pas être modifiés via cette méthode
-    
+
     // Seul le créateur peut modifier le prix
     if (socket.userData._id.toString() !== room.creator.toString()) {
       delete allowedUpdates.price;
@@ -561,7 +597,10 @@ export async function handleUpdateRoom(socket, io, data, callback) {
     callback({ success: true, room: updatedRoom });
   } catch (error) {
     console.log("Erreur lors de la mise à jour de la room:", error);
-    callback({ error: "Erreur lors de la mise à jour", details: error.message });
+    callback({
+      error: "Erreur lors de la mise à jour",
+      details: error.message,
+    });
   }
 }
 
@@ -585,22 +624,28 @@ export async function handleLeaveRoom(socket, io, data, callback) {
     }
 
     // Vérifier si l'utilisateur est membre
-    if (!room.members.some(member => member.toString() === socket.userData._id.toString())) {
+    if (
+      !room.members.some(
+        (member) => member.toString() === socket.userData._id.toString()
+      )
+    ) {
       return callback({ error: "Vous n'êtes pas membre de cette room" });
     }
 
-    const isAdmin = room.admins.some(admin => admin.toString() === socket.userData._id.toString());
+    const isAdmin = room.admins.some(
+      (admin) => admin.toString() === socket.userData._id.toString()
+    );
     const isOnlyAdmin = isAdmin && room.admins.length === 1;
 
     // Gérer la transition d'admin si nécessaire
     if (isOnlyAdmin && room.members.length > 1) {
       const otherMembers = room.members.filter(
-        member => member.toString() !== socket.userData._id.toString()
+        (member) => member.toString() !== socket.userData._id.toString()
       );
 
       if (otherMembers.length > 0) {
         room.admins = [otherMembers[0]];
-        
+
         // Notifier le nouvel admin
         const adminNotification = await createNotification({
           recipient: otherMembers[0],
@@ -611,25 +656,32 @@ export async function handleLeaveRoom(socket, io, data, callback) {
             roomId: room._id,
           },
         });
-        await sendNotificationToUsers(io, [adminNotification], global.connectedUsers);
+        await sendNotificationToUsers(
+          io,
+          [adminNotification],
+          global.connectedUsers
+        );
       }
     } else if (room.members.length === 1) {
       // Supprimer la room si c'est le dernier membre et pas de solde
       if (room.wallet.balance <= 0) {
         await Room.findByIdAndDelete(roomId).session(session);
         socket.leave(roomId);
-        return callback({ success: true, message: "Room supprimée car vous étiez le dernier membre" });
+        return callback({
+          success: true,
+          message: "Room supprimée car vous étiez le dernier membre",
+        });
       }
     } else if (isAdmin) {
       // Retirer des admins si ce n'est pas le seul
       room.admins = room.admins.filter(
-        admin => admin.toString() !== socket.userData._id.toString()
+        (admin) => admin.toString() !== socket.userData._id.toString()
       );
     }
 
     // Retirer l'utilisateur des membres
     room.members = room.members.filter(
-      member => member.toString() !== socket.userData._id.toString()
+      (member) => member.toString() !== socket.userData._id.toString()
     );
 
     await room.save({ session });
@@ -638,22 +690,26 @@ export async function handleLeaveRoom(socket, io, data, callback) {
     socket.leave(roomId);
 
     // Notifications aux autres membres
-    const notificationPromises = room.members.map(async (memberId) =>
-      await createNotification({
-        recipient: memberId,
-        type: "room_update",
-        content: {
-          title: "Membre parti",
-          message: `${socket.userData.userName} (KSD:${socket.userData.KSD}) a quitté la room "${room.name}"`,
-          roomId: room._id,
-        },
-      })
+    const notificationPromises = room.members.map(
+      async (memberId) =>
+        await createNotification({
+          recipient: memberId,
+          type: "room_update",
+          content: {
+            title: "Membre parti",
+            message: `${socket.userData.userName} (KSD:${socket.userData.KSD}) a quitté la room "${room.name}"`,
+            roomId: room._id,
+          },
+        })
     );
 
     const notifications = await Promise.all(notificationPromises);
     await sendNotificationToUsers(io, notifications, global.connectedUsers);
 
-    callback({ success: true, message: "Vous avez quitté la room avec succès" });
+    callback({
+      success: true,
+      message: "Vous avez quitté la room avec succès",
+    });
   } catch (error) {
     console.log("Erreur lors de la sortie de la room:", error);
     callback({ error: "Erreur lors de la sortie", details: error.message });
@@ -682,35 +738,44 @@ export async function handleKickMember(socket, io, data, callback) {
     }
 
     // Vérifier les permissions d'admin
-    if (!room.admins.some(admin => admin.toString() === socket.userData._id.toString())) {
-      return callback({ error: "Seuls les administrateurs peuvent expulser des membres" });
+    if (
+      !room.admins.some(
+        (admin) => admin.toString() === socket.userData._id.toString()
+      )
+    ) {
+      return callback({
+        error: "Seuls les administrateurs peuvent expulser des membres",
+      });
     }
 
     // Vérifier si l'utilisateur est membre
-    if (!room.members.some(member => member.toString() === userId)) {
+    if (!room.members.some((member) => member.toString() === userId)) {
       return callback({ error: "Cet utilisateur n'est pas membre de la room" });
     }
 
     // Empêcher l'expulsion d'un admin
-    if (room.admins.some(admin => admin.toString() === userId)) {
+    if (room.admins.some((admin) => admin.toString() === userId)) {
       return callback({ error: "Impossible d'expulser un administrateur" });
     }
 
     // Retirer l'utilisateur
-    room.members = room.members.filter(member => member.toString() !== userId);
+    room.members = room.members.filter(
+      (member) => member.toString() !== userId
+    );
     await room.save({ session });
 
     // Notifications
-    const notificationPromises = room.members.map(async (memberId) =>
-      await createNotification({
-        recipient: memberId,
-        type: "room_update",
-        content: {
-          title: "Membre expulsé",
-          message: `Un membre a été expulsé de la room "${room.name}"`,
-          roomId: room._id,
-        },
-      })
+    const notificationPromises = room.members.map(
+      async (memberId) =>
+        await createNotification({
+          recipient: memberId,
+          type: "room_update",
+          content: {
+            title: "Membre expulsé",
+            message: `Un membre a été expulsé de la room "${room.name}"`,
+            roomId: room._id,
+          },
+        })
     );
 
     const kickedNotification = await createNotification({
@@ -724,7 +789,11 @@ export async function handleKickMember(socket, io, data, callback) {
     });
 
     const notifications = await Promise.all(notificationPromises);
-    await sendNotificationToUsers(io, [...notifications, kickedNotification], global.connectedUsers);
+    await sendNotificationToUsers(
+      io,
+      [...notifications, kickedNotification],
+      global.connectedUsers
+    );
 
     callback({ success: true, message: "Membre expulsé avec succès" });
   } catch (error) {
@@ -755,19 +824,29 @@ export async function handleBanMember(socket, io, data, callback) {
     }
 
     // Vérifier les permissions
-    if (!room.admins.some(admin => admin.toString() === socket.userData._id.toString())) {
-      return callback({ error: "Seuls les administrateurs peuvent bannir des membres" });
+    if (
+      !room.admins.some(
+        (admin) => admin.toString() === socket.userData._id.toString()
+      )
+    ) {
+      return callback({
+        error: "Seuls les administrateurs peuvent bannir des membres",
+      });
     }
 
     // Empêcher le bannissement d'un admin
-    if (room.admins.some(admin => admin.toString() === userId)) {
+    if (room.admins.some((admin) => admin.toString() === userId)) {
       return callback({ error: "Impossible de bannir un administrateur" });
     }
 
     // Retirer des membres s'il y est
-    const isMember = room.members.some(member => member.toString() === userId);
+    const isMember = room.members.some(
+      (member) => member.toString() === userId
+    );
     if (isMember) {
-      room.members = room.members.filter(member => member.toString() !== userId);
+      room.members = room.members.filter(
+        (member) => member.toString() !== userId
+      );
     }
 
     // Ajouter à la liste des bannis
@@ -775,7 +854,9 @@ export async function handleBanMember(socket, io, data, callback) {
       room.bannedUsersFromRoom = [];
     }
 
-    if (!room.bannedUsersFromRoom.some(ban => ban.userId.toString() === userId)) {
+    if (
+      !room.bannedUsersFromRoom.some((ban) => ban.userId.toString() === userId)
+    ) {
       room.bannedUsersFromRoom.push({
         userId,
         bannedBy: socket.userData._id,
@@ -788,16 +869,19 @@ export async function handleBanMember(socket, io, data, callback) {
     await room.save({ session });
 
     // Notifications
-    const notificationPromises = room.members.map(async (memberId) =>
-      await createNotification({
-        recipient: memberId,
-        type: "room_update",
-        content: {
-          title: "Membre banni",
-          message: `Un membre a été banni de la room "${room.name}". Raison: ${reason || "Aucune raison spécifiée"}`,
-          roomId: room._id,
-        },
-      })
+    const notificationPromises = room.members.map(
+      async (memberId) =>
+        await createNotification({
+          recipient: memberId,
+          type: "room_update",
+          content: {
+            title: "Membre banni",
+            message: `Un membre a été banni de la room "${
+              room.name
+            }". Raison: ${reason || "Aucune raison spécifiée"}`,
+            roomId: room._id,
+          },
+        })
     );
 
     const bannedNotification = await createNotification({
@@ -805,13 +889,19 @@ export async function handleBanMember(socket, io, data, callback) {
       type: "room_update",
       content: {
         title: "Bannissement de room",
-        message: `Vous avez été banni de la room "${room.name}". Raison: ${reason || "Aucune raison spécifiée"}`,
+        message: `Vous avez été banni de la room "${room.name}". Raison: ${
+          reason || "Aucune raison spécifiée"
+        }`,
         roomId: room._id,
       },
     });
 
     const notifications = await Promise.all(notificationPromises);
-    await sendNotificationToUsers(io, [...notifications, bannedNotification], global.connectedUsers);
+    await sendNotificationToUsers(
+      io,
+      [...notifications, bannedNotification],
+      global.connectedUsers
+    );
 
     callback({ success: true, message: "Membre banni avec succès" });
   } catch (error) {
@@ -851,7 +941,9 @@ export async function handleAddGroupAdmin(socket, data, callback) {
 
     // Vérifier s'il n'est pas déjà admin
     if (group.admins.includes(newAdminId)) {
-      return callback({ error: "L'utilisateur est déjà administrateur du groupe" });
+      return callback({
+        error: "L'utilisateur est déjà administrateur du groupe",
+      });
     }
 
     const updatedGroup = await Room.findByIdAndUpdate(
@@ -867,7 +959,10 @@ export async function handleAddGroupAdmin(socket, data, callback) {
     });
   } catch (error) {
     console.log("Erreur lors de l'ajout d'admin:", error);
-    callback({ error: "Erreur lors de l'ajout d'admin", details: error.message });
+    callback({
+      error: "Erreur lors de l'ajout d'admin",
+      details: error.message,
+    });
   }
 }
 
@@ -875,7 +970,11 @@ export async function handleFindNearbyGroups(socket, data, callback) {
   try {
     const { coordinates, radius = 1000, userId } = data;
 
-    if (!coordinates || !Array.isArray(coordinates) || coordinates.length !== 2) {
+    if (
+      !coordinates ||
+      !Array.isArray(coordinates) ||
+      coordinates.length !== 2
+    ) {
       return callback({ error: "Coordonnées invalides" });
     }
 
@@ -893,10 +992,7 @@ export async function handleFindNearbyGroups(socket, data, callback) {
 
     // Gérer la visibilité
     if (userId) {
-      query.$or = [
-        { isPrivate: false },
-        { isPrivate: true, members: userId },
-      ];
+      query.$or = [{ isPrivate: false }, { isPrivate: true, members: userId }];
     } else {
       query.isPrivate = false;
     }
@@ -914,7 +1010,10 @@ export async function handleFindNearbyGroups(socket, data, callback) {
     });
   } catch (error) {
     console.log("Erreur lors de la recherche de groupes à proximité:", error);
-    callback({ error: "Erreur lors de la recherche de groupes", details: error.message });
+    callback({
+      error: "Erreur lors de la recherche de groupes",
+      details: error.message,
+    });
   }
 }
 
@@ -937,7 +1036,9 @@ export async function handleRateGroup(socket, io, data, callback) {
 
     // Vérifier l'appartenance
     if (!group.members.includes(socket.userData._id)) {
-      return callback({ error: "Vous devez être membre du groupe pour l'évaluer" });
+      return callback({
+        error: "Vous devez être membre du groupe pour l'évaluer",
+      });
     }
 
     // Gérer l'évaluation
@@ -1000,7 +1101,10 @@ export async function handleRateGroup(socket, io, data, callback) {
     });
   } catch (error) {
     console.log("Erreur lors de l'évaluation:", error);
-    callback({ error: "Erreur lors de l'évaluation du groupe", details: error.message });
+    callback({
+      error: "Erreur lors de l'évaluation du groupe",
+      details: error.message,
+    });
   }
 }
 
@@ -1028,7 +1132,9 @@ export async function handleRequestRoomRefund(socket, io, data, callback) {
     }).session(session);
 
     if (!payment) {
-      return callback({ error: "Aucun paiement remboursable trouvé pour cette room" });
+      return callback({
+        error: "Aucun paiement remboursable trouvé pour cette room",
+      });
     }
 
     // Vérifier la période de remboursement
@@ -1041,12 +1147,16 @@ export async function handleRequestRoomRefund(socket, io, data, callback) {
       return callback({ error: "Room non trouvée" });
     }
 
-    const user = await User.findById(socket.userData._id).session(session).select("wallet");
+    const user = await User.findById(socket.userData._id)
+      .session(session)
+      .select("wallet");
     if (!user) {
       return callback({ error: "Utilisateur non trouvé" });
     }
 
-    const creator = await User.findById(room.creator).session(session).select("wallet");
+    const creator = await User.findById(room.creator)
+      .session(session)
+      .select("wallet");
     if (!creator) {
       return callback({ error: "Propriétaire de la room non trouvé" });
     }
@@ -1094,16 +1204,17 @@ export async function handleRequestRoomRefund(socket, io, data, callback) {
     socket.leave(roomId);
 
     // Notifications
-    const leaveNotifications = room.members.map(async (memberId) =>
-      await createNotification({
-        recipient: memberId,
-        type: "room_update",
-        content: {
-          title: "Membre parti",
-          message: `${socket.userData.userName}(${socket.userData.KSD}) a quitté la room après remboursement`,
-          roomId: room._id,
-        },
-      })
+    const leaveNotifications = room.members.map(
+      async (memberId) =>
+        await createNotification({
+          recipient: memberId,
+          type: "room_update",
+          content: {
+            title: "Membre parti",
+            message: `${socket.userData.userName}(${socket.userData.KSD}) a quitté la room après remboursement`,
+            roomId: room._id,
+          },
+        })
     );
 
     const refundNotifications = await Promise.all([
@@ -1128,7 +1239,11 @@ export async function handleRequestRoomRefund(socket, io, data, callback) {
     ]);
 
     const allNotifications = await Promise.all(leaveNotifications);
-    await sendNotificationToUsers(io, [...allNotifications, ...refundNotifications], global.connectedUsers);
+    await sendNotificationToUsers(
+      io,
+      [...allNotifications, ...refundNotifications],
+      global.connectedUsers
+    );
 
     callback({
       success: true,

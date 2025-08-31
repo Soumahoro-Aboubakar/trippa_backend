@@ -110,7 +110,7 @@ const UserSchema = new Schema(
       },
     },
     rooms: {
-      type: [Schema.Types.ObjectId],
+      type: [String],
       ref: "Room",
     },
     wallet: {

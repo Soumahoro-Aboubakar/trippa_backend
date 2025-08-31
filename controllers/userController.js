@@ -744,3 +744,29 @@ export const updateLocation = async (socket, data) => {
     socket.emit("location:error", { message: "Erreur serveur" });
   }
 };
+
+export async function joinUserRooms(socket) {
+  const userId = socket?.userData?._id;
+  if (!userId) {
+    console.warn("Impossible de rejoindre les rooms : utilisateur non authentifié.");
+    return;
+  }
+
+  try {
+    const user = await User.findById(userId).select("rooms").lean();
+    if (!user || !Array.isArray(user.rooms)) {
+      console.warn(`Aucune room trouvée pour l'utilisateur ${userId}`);
+      return;
+    }
+
+    user.rooms.forEach((roomId) => {
+      if (roomId) {
+        socket.join(roomId.toString());
+      }
+    });
+
+    console.log(`🔗 L'utilisateur ${userId} a rejoint ${user.rooms.length} room(s).`);
+  } catch (err) {
+    console.error("❌ Erreur lors de la jonction aux rooms :", err);
+  }
+}

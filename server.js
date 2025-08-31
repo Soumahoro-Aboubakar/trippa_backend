@@ -21,6 +21,7 @@ import { configureStatusSocket } from "./socket/statusHandlers.js";
 import { markExpiredFileShares } from "./services/fileShareService.js";
 import { setupFileShareSocket } from "./socket/fileShareHandlers.js";
 import https from "https";
+import { joinUserRooms } from "./controllers/userController.js";
 
 
 dotenv.config();
@@ -148,7 +149,7 @@ io.on("connection", async (socket) => {
 
   console.log(`Utilisateur connecté: ${socket.userData._id}`);
   console.log(`Nombre d'utilisateurs connectés: ${global.connectedUsers.size}`);
-
+   await joinUserRooms(socket);
   //global.uploadService.registerSocketHandlers(socket);
   userHandlers(io, socket);
   //setupSocketHandlers(io); //une fonction permet de gérer les utilitaires des  utilisateurs
