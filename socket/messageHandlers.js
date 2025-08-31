@@ -517,7 +517,7 @@ export const socketMessageHandlers = (io, socket) => {
 
     // Joindre les utilisateurs à la room
     socket.join(savedRoom.id.toString());
-
+    console.log("Voici l'id souhaité dans create savedRoom.id.toString() : ", savedRoom.id.toString());
     // Joindre le destinataire/membres s'ils sont connectés
     if (!upload.isGroup && global.connectedUsers?.has(upload.receiver)) {
       const receiverSocketId = global.connectedUsers.get(upload.receiver);

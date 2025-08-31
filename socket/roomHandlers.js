@@ -338,7 +338,7 @@ export async function handleCreateRoom(socket, roomData, callback) {
     await user.save({ session });
 
     // Connexion du socket à la nouvelle salle
-    socket.join(savedRoom._id.toString());
+    socket.join(processedData.id.toString());
 
     // Création de la réponse
     const response = {
