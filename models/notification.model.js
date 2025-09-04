@@ -10,8 +10,9 @@ const NotificationSchema = new mongoose.Schema({
     sender: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User'
-    }, kickedBy: {
-        type: String, //Permey de stocker l'Id de la personne qui à expulser un utilisateur x dans un groupe
+    }, 
+    kickedBy: {
+        type: String, //Permet de stocker l'Id de la personne qui à expulser un utilisateur x dans un groupe
 
     },
     type: {
@@ -35,15 +36,18 @@ const NotificationSchema = new mongoose.Schema({
             "refund_processed",
             "insufficient_funds",
             "room_update",
+            "message_status_changed"
         ],
         required: true
     },
     content: {
         title: String,
         message: String,
-        status: String,
+        status: String, //le nouveau status de l'entité concerné
         paymentId: String,
-        roomId: String,
+     //   messageId: String,
+        room:  mongoose.Schema.Types.ObjectId,
+        messagesIds : [], //très important pour les messages qui sont concernés pas la notification
     },
     coinsEarned: {
         type: Number,
@@ -64,7 +68,7 @@ const NotificationSchema = new mongoose.Schema({
     },
     isRead: {
         type: Boolean,
-        default: false
+        default: false //important pour les notification très important (exemple payement)
     },
     isSent: {
         type: Boolean,
@@ -114,11 +118,13 @@ NotificationSchema.statics.markAllAsRead = function (userId) {
     );
 };
 
+
 // Méthode statique pour récupérer les notifications non lues d'un utilisateur
-NotificationSchema.statics.getUnreadByUser = function (userId) {
-    return this.find(
-        { recipient: userId, isRead: false }
-    ).sort({ createdAt: -1 });
+NotificationSchema.statics.getUnreadByUser = async function (userId) {
+    if(!userId) return []; 
+    return await this.find(
+            { recipient: userId, status: 'CREATED' }
+        ).sort({ createdAt: -1 }).exec();
 };
 
 const Notification = mongoose.model('Notification', NotificationSchema);

@@ -455,7 +455,7 @@ export const socketMessageHandlers = (io, socket) => {
     if (upload.room?.id) {
       const checkRoom = await Room.findOne({ id: upload.room.id }).lean();
       if (checkRoom) {
-        const result = { roomId: upload.room.id, isNew: false };
+        const result = { room: checkRoom._id, isNew: false };
         roomCache.set(cacheKey, result);
         return result;
       }
@@ -517,7 +517,10 @@ export const socketMessageHandlers = (io, socket) => {
 
     // Joindre les utilisateurs à la room
     socket.join(savedRoom.id.toString());
-    console.log("Voici l'id souhaité dans create savedRoom.id.toString() : ", savedRoom.id.toString());
+    console.log(
+      "Voici l'id souhaité dans create savedRoom.id.toString() : ",
+      savedRoom.id.toString()
+    );
     // Joindre le destinataire/membres s'ils sont connectés
     if (!upload.isGroup && global.connectedUsers?.has(upload.receiver)) {
       const receiverSocketId = global.connectedUsers.get(upload.receiver);
@@ -538,7 +541,7 @@ export const socketMessageHandlers = (io, socket) => {
       });
     }
 
-    const result = { roomId: savedRoom.id, isNew: true };
+    const result = { room: savedRoom._id, isNew: true };
     roomCache.set(cacheKey, result);
     return result;
   }
@@ -563,7 +566,7 @@ export const socketMessageHandlers = (io, socket) => {
         session
       );
 
-      messageData.room = roomInfo.roomId;
+      messageData.room = roomInfo.room;
       //verifie que le message n'existe pas déjà en base de donnée
       const checkMessage = await Message.findOne({
         id: messageData.id,
@@ -589,7 +592,7 @@ export const socketMessageHandlers = (io, socket) => {
         { path: "sender", select: filterData },
         { path: "receiver", select: filterData },
       ]);
-      io.to(messageData.room?.toString()).emit("newMessage", populatedMessage);
+      io.to(messageData.room?.id).emit("newMessage", populatedMessage);
       socket.emit("message:created", {
         code: 200,
         message: "Message enregistré dans la db",
@@ -601,6 +604,91 @@ export const socketMessageHandlers = (io, socket) => {
       session.endSession();
     }
   });
+
+  socket.on("updateMessagesStatus", async (messageData, callback) => {
+    const parsed = dataParse(messageData);
+    if (!parsed) {
+      return callback({ error: "Données introuvables", code: 400 });
+    }
+
+    try {
+      const { messagesIds, status, receiverId, room } = parsed;
+      //entityId = _id du room
+      if (!messagesIds || !status || !receiverId || !room) {
+        return callback({ error: "Données manquantes", code: 400 });
+      }
+      const roomData = await Room.findOne({ id: room });
+      if (!roomData)
+        return callback({ error: "Room introuvable", code: 400 });
+
+      await Message.updateMany(
+        { id: { $in: messagesIds } },
+        { $set: { status } }
+      );
+
+      const newNotification = new Notification({
+        type: "message_status_changed",
+        status: "CREATED",
+        sender: socket.userData._id,
+        recipient: receiverId,
+        relatedEntity: "Room",
+        entityId : roomData._id,
+        content: {  room : roomData._id, messagesIds },
+      });
+
+      await newNotification.save();
+
+      io.to(room.toString()).emit("newNotifications", {
+        notifications: [newNotification],
+      });
+
+      callback({ message: "Mise à jour réussie", code: 200 });
+    } catch (err) {
+      console.error("Erreur lors de updateMany:", err);
+      return callback({
+        message: "Une erreur est survenue",
+        error: err.message,
+        code: 500,
+      });
+    }
+  });
+
+  socket.on("updateNotificationStatus", async (notificationData, callback) => {
+    const parsedData = dataParse(notificationData);
+    if (!parsedData) {
+        return callback({ error: "Données manquantes", code: 400 });
+    }
+    
+    const { notificationId, status } = parsedData;
+    if (!notificationId || !status) {
+        return callback({ error: "Données manquantes", code: 400 });
+    }
+    
+    try {
+        const notification = await Notification.findByIdAndUpdate(
+            notificationId, 
+            { status: status },
+            { new: true }
+        );
+        
+        if (!notification) {
+            return callback({ error: "Notification non trouvée", code: 404 });
+        }
+        
+        callback({ 
+            success: true, 
+            data: notification,
+            message: "Statut de la notification mis à jour avec succès" 
+        });
+        
+    } catch (error) {
+        console.error("Erreur lors de la mise à jour de la notification:", error);
+        callback({ 
+            error: "Erreur serveur lors de la mise à jour", 
+            code: 500 
+        });
+    }
+});
 
   socket.on("fetchNewMessages", async ({ roomId }) => {
     const roomObjectId = new mongoose.Types.ObjectId(String(roomId));
@@ -742,4 +830,13 @@ export const setupErrorHandlers = (socket) => {
   socket.on("disconnect", () => {
     global.connectedUsers.delete(socket.userData?._id?.toString());
   });
+};
+
+export const sendReceivedMessages = async (socket) => {
+  try {
+    const newMessages = await Message.getReceivedMessages(socket.userData._id);
+    socket.emit("newMessages", { messages: newMessages, code: 200 });
+  } catch (error) {
+    console.error("Erreur lors de la récupération des messages :", error);
+  }
 };
