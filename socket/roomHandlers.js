@@ -300,8 +300,8 @@ export async function handleCreateRoom(socket, roomData, callback) {
     if (existingRoom) {
       return callback({
         error: "Une salle avec cet ID existe déjà",
-        code: 409,
-        success: false,
+        code: 200,
+        success: true,
         room: existingRoom,
       });
     }

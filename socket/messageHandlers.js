@@ -519,7 +519,7 @@ export const socketMessageHandlers = (io, socket) => {
     socket.join(savedRoom.id.toString());
     console.log(
       "Voici l'id souhaité dans create savedRoom.id.toString() : ",
-      savedRoom.id.toString()
+      savedRoom
     );
     // Joindre le destinataire/membres s'ils sont connectés
     if (!upload.isGroup && global.connectedUsers?.has(upload.receiver)) {
@@ -592,11 +592,13 @@ export const socketMessageHandlers = (io, socket) => {
         { path: "sender", select: filterData },
         { path: "receiver", select: filterData },
       ]);
+    console.log("message:created événement pour ajouter un user au room ", messageData.room);
       io.to(messageData.room?.id).emit("newMessage", populatedMessage);
       socket.emit("message:created", {
         code: 200,
         message: "Message enregistré dans la db",
       });
+
     } catch (error) {
       console.error("Erreur lors de l'envoi du message texte:", error);
       socket.emit("message:error", { error: error.message });
