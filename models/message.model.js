@@ -1,6 +1,6 @@
 
 import mongoose from "mongoose";
-import { userDataToSelect } from "../controllers/userController";
+import { userDataToSelect } from "../controllers/userController.js";
 
 //NB: room = room.id et non room._id
 const Schema = mongoose.Schema;
