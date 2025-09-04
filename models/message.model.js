@@ -1,5 +1,6 @@
 
 import mongoose from "mongoose";
+import { userDataToSelect } from "../controllers/userController";
 
 //NB: room = room.id et non room._id
 const Schema = mongoose.Schema;
@@ -32,9 +33,9 @@ MessageSchema.statics.getReceivedMessages = async function(userId) {
 
    const messages = await this.find(
             { receiver: userId, status: 'RECEIVED_BY_SERVER' }
-        ).populate('sender', 'name email') 
-        .populate('receiver', 'name email') 
-        .sort({ createdAt: -1 })
+        ).populate('sender', userDataToSelect("121","451")) //j'utilise des nombre aléatoire juste pour ne pas extraire certainnes informations
+        .populate('receiver', userDataToSelect("121","451")).populate("room")
+     //   .sort({ createdAt: -1 })
         return messages;
 };
 

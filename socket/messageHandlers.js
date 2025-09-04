@@ -592,8 +592,8 @@ export const socketMessageHandlers = (io, socket) => {
         { path: "sender", select: filterData },
         { path: "receiver", select: filterData },
       ]);
-    console.log("message:created événement pour ajouter un user au room ", messageData.room);
-      io.to(messageData.room?.id).emit("newMessage", populatedMessage);
+    console.log("message:created événement pour ajouter un user au room ", roomInfo.room);
+      io.to(roomInfo.room).emit("newMessage", populatedMessage);
       socket.emit("message:created", {
         code: 200,
         message: "Message enregistré dans la db",
