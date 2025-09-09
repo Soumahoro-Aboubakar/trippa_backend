@@ -33,7 +33,7 @@ MessageSchema.statics.getReceivedMessages = async function(userId) {
     if (!userId) return [];
 
    const messages = await this.find(
-            { receiver:  normalizeUserId("68b9d38db5eddadb58e344aa") /*userId */, status: 'RECEIVED_BY_SERVER' }
+            { receiver:  normalizeUserId("68b9d38db5eddadb58e344aa") /*userId , status: 'RECEIVED_BY_SERVER'*/ }
         ).populate('sender', userDataToSelect("121","451")) //j'utilise des nombre aléatoire juste pour ne pas extraire certainnes informations
         .populate('receiver', userDataToSelect("121","451")).populate("room").lean(); 
      //   .sort({ createdAt: -1 })
