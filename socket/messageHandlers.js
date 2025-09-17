@@ -835,10 +835,13 @@ export const setupErrorHandlers = (socket) => {
 };
 
 export const sendReceivedMessages = async (socket) => {
-  try {
+ socket.on("getNewMessages", async (data)=>{
+   console.log(" l'utilisateur veux récupérer ses informations : getNewMessages data", data);
+   try {
     const newMessages = await Message.getReceivedMessages(socket.userData._id);
     socket.emit("newMessages", { messages: newMessages, code: 200 });
   } catch (error) {
     console.error("Erreur lors de la récupération des messages :", error);
   }
+ })
 };
