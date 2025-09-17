@@ -10,7 +10,7 @@ const MessageSchema = new Schema({
     sender: { type: Schema.Types.ObjectId, ref: 'User', required: true },
     receiver: { type: Schema.Types.ObjectId, ref: 'User' }, // Pour messages privés
   //  roomId: { type: String },  Pour messages de groupe. Pour le croisement avec la room, on utilise l'id de la room et non son _id
-    content: String,
+    text: String,
     room : { type: Schema.Types.ObjectId, ref: 'Room' },
     type: { type: String, enum: ['text', 'image', 'alert', 'video', 'audio', "pdf", "documents", 'commercial'] },
     isAnonymous: Boolean,

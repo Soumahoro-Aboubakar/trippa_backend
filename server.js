@@ -30,7 +30,7 @@ dotenv.config();
 // Configuration d'Express
 const app = express();
 const server = http.createServer(app);
-const authEvenNames = [
+const authEventNames = [
   "verification:code",
   "create_user",
   "resent:verification_code",
@@ -85,8 +85,9 @@ global.connectedUsers = new Map();
 // Middleware d'authentification Socket.IO
 io.use((socket, next) => {
   const token = socket.handshake.query.token;
-  console.log(" le token courrent est  :  *////////////////////////" , token);
-  if (!token) {
+  console.log("Token reçu:", token ? "présent" : "absent");
+  
+  if (!token || token === "null") {
     socket.userData = { isNew: true };
     return next();
   }
@@ -94,64 +95,137 @@ io.use((socket, next) => {
   verifyToken(token)
     .then((decoded) => {
       socket.userData = { _id: decoded.userId };
-      console.log("token decoder avec succès *////////////////////", decoded);
+      console.log("Token décodé avec succès pour l'utilisateur:", decoded.userId);
       next();
     })
     .catch((error) => {
-    console.log("une erreur tès importante apparue  *///////////////////////////////// ",error);
-      socket.onAny((eventName, ...args) => {
-        if (eventName && authEvenNames.includes(eventName.trim())) next();
-      });
+      console.log("Erreur de vérification du token:", error.name);
+      
+      // Pour les tokens expirés, permettre la connexion mais marquer comme nécessitant un refresh
       if (error.name === "TokenExpiredError") {
-        socket.emit("expired:token", { message: "Token expiré" });
+        socket.userData = { isNew: true, needsRefresh: true };
+        console.log("Token expiré - connexion autorisée pour rafraîchissement");
+        return next();
       }
+      
+      // Pour les autres erreurs, traiter comme un nouvel utilisateur
       socket.userData = { isNew: true };
       next();
     });
 });
+
 // Initialisation des gestionnaires de sockets
 io.on("connection", async (socket) => {
-
-  // Gestion du rafraîchissement de token
+ console.log(`Nouvelle connexion socket: ${socket.id}`);
+ // Gestion prioritaire du rafraîchissement de token
   socket.on("update:refresh_token", async (data) => {
+    console.log("🔄 Demande de rafraîchissement de token reçue");
+    
     try {
-      console.log(" voici la data parser pour refreche le token : " , dataParse(data));
-      const result = await refreshUserToken({
-        ...dataParse(data),
+      const parsedData = dataParse(data);
+      console.log("Data parsée pour le rafraîchissement:", {
+        userId: parsedData.userId,
+        hasRefreshToken: !!parsedData.refreshToken,
+        hasDeviceId: !!parsedData.deviceId
       });
+      
+      const result = await refreshUserToken(parsedData);
+      
       if (result.error) {
+        console.log("❌ Erreur de rafraîchissement:", result.error);
         socket.emit("refresh_error", result.error);
-        console.log(" voici l'erreur prsent dans la section de la mise du token ", result.error);
       } else {
-        console.log("le token est rafraichir avec succes les gars  ", result.tokens);
+        console.log("✅ Token rafraîchi avec succès");
+        
+        // Mettre à jour les données utilisateur de la socket
+        socket.userData = { _id: parsedData.userId };
+        
+        // Émettre le nouveau token
         socket.emit("token_refreshed", result.tokens);
+        
+        // Ne PAS déconnecter la socket - laisser le client gérer la reconnexion
+        console.log("Token envoyé au client, attente de reconnexion...");
       }
     } catch (error) {
-      console.log("   je rencontre une erreur très grave  " , error);
-      socket.emit("refresh_error", { code: 500, message: "Erreur serveur" });
+      console.error("❌ Erreur grave lors du rafraîchissement:", error);
+      socket.emit("refresh_error", { 
+        code: 500, 
+        message: "Erreur serveur lors du rafraîchissement" 
+      });
     }
   });
 
-  // Initialisation utilisateur authentifié
+    // Émettre le signal de token expiré si nécessaire
+  if (socket.userData?.needsRefresh) {
+    console.log("🔑 Émission du signal de token expiré");
+    socket.emit("expired:token", { message: "Token expiré" });
+  }
+
+   // Initialisation pour les utilisateurs authentifiés
   if (socket.userData && socket.userData._id && !socket.userData.isNew) {
     try {
+      console.log(`Initialisation utilisateur authentifié: ${socket.userData._id}`);
       await initializeAuthenticatedUser(socket, socket.userData._id);
+      await initializeSocketHandlers(socket);
     } catch (error) {
       console.error("Erreur d'initialisation utilisateur:", error);
       return socket.disconnect();
     }
   } else {
-    // Utilisateur non authentifié, limiter les événements disponibles
+    // Utilisateur non authentifié - limiter les événements
+    console.log("Utilisateur non authentifié - limitation des événements");
+    
+    const allowedEvents = new Set([
+      ...authEventNames,
+      "disconnect",
+      "error"
+    ]);
+
     socket.onAny((eventName, ...args) => {
-       console.log("on desctive l'evenement hein *///////////////" , eventName);
-      if (eventName && !authEvenNames.includes(eventName.trim()))
-        return socket.disconnect();
+      if (eventName && !allowedEvents.has(eventName.trim())) {
+        console.log(`❌ Événement non autorisé pour utilisateur non auth: ${eventName}`);
+        return;
+      }
     });
+
+    // Pour les nouveaux utilisateurs, ne pas initialiser les handlers complets
+    if (!socket.userData?.needsRefresh) {
+      // Seuls les handlers d'authentification sont nécessaires
+      userHandlers(io, socket);
+    }
   }
 
-
+  console.log(`Utilisateur connecté: ${socket.userData?._id || 'anonyme'}`);
+  console.log(`Nombre d'utilisateurs connectés: ${global.connectedUsers.size}`);
+});
  
-  console.log(`Utilisateur connecté: ${socket.userData._id}`);
+
+async function initializeSocketHandlers(socket) {
+  try {
+    await joinUserRooms(socket);
+    
+    // Initialiser tous les handlers
+    userHandlers(io, socket);
+    socketMessageHandlers(io, socket);
+    setupPaymentSocket(socket);
+    setupRoomSocket(io, socket);
+    configureBusinessSocket(socket);
+    configureStatusSocket(io, socket);
+    setupErrorHandlers(socket);
+    setupFileShareSocket(socket);
+    mediaUploader(socket);
+    
+    // Envoyer les données initiales
+    await sendUnreadNotifications(socket);
+    await sendReceivedMessages(socket);
+    
+    console.log(`✅ Handlers initialisés pour l'utilisateur: ${socket.userData._id}`);
+  } catch (error) {
+    console.error("❌ Erreur lors de l'initialisation des handlers:", error);
+    throw error;
+  }
+}
+/*  console.log(`Utilisateur connecté: ${socket.userData._id}`);
   console.log(`Nombre d'utilisateurs connectés: ${global.connectedUsers.size}`);
     try {
       await joinUserRooms(socket);
@@ -171,9 +245,7 @@ io.on("connection", async (socket) => {
   await sendReceivedMessages(socket);
     } catch (error) {
        console.log("c'est une erreur du serveur : ", error);
-    }
-});
-
+    } */
 // Mark expired file shares every hour
 setInterval(async () => {
   try {
