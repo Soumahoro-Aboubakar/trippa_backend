@@ -165,7 +165,7 @@ io.on("connection", async (socket) => {
   if (socket.userData && socket.userData._id && !socket.userData.isNew) {
     try {
       console.log(`Initialisation utilisateur authentifié: ${socket.userData._id}`);
-      await initializeAuthenticatedUser(socket, socket.userData._id);
+   //   await initializeAuthenticatedUser(socket, socket.userData._id);
       await initializeSocketHandlers(socket);
     } catch (error) {
       console.error("Erreur d'initialisation utilisateur:", error);
