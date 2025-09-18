@@ -455,7 +455,7 @@ export const socketMessageHandlers = (io, socket) => {
     if (upload.room?.id) {
       const checkRoom = await Room.findOne({ id: upload.room.id }).lean();
       if (checkRoom) {
-        const result = { room: checkRoom._id, isNew: false };
+        const result = { room: checkRoom.id, isNew: false };
         roomCache.set(cacheKey, result);
         return result;
       }
@@ -591,8 +591,8 @@ export const socketMessageHandlers = (io, socket) => {
       ).populate([
         { path: "sender", select: filterData },
         { path: "receiver", select: filterData },
-      ]);
-    console.log("message:created événement pour ajouter un user au room ", roomInfo.room);
+      ]);//68cb438bea019499c3f78cf768cb3c11ea019499c3f78c70
+    console.log("message:created événement pour ajouter un user au room ", roomInfo.room,  " voici le reste contenu du message serveur ", populatedMessage, " et celle venant du client ", messageData);
       io.to(roomInfo.room).emit("newMessage", populatedMessage);
       socket.emit("message:created", {
         code: 200,
