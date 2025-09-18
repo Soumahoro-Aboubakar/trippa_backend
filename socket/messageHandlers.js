@@ -592,7 +592,8 @@ export const socketMessageHandlers = (io, socket) => {
       ).populate([
         { path: "sender", select: filterData },
         { path: "receiver", select: filterData },
-      ]);//68cb438bea019499c3f78cf768cb3c11ea019499c3f78c70
+     
+      ]).populate("room").lean();//68cb438bea019499c3f78cf768cb3c11ea019499c3f78c70
     console.log("message:created événement pour roomKey : " , roomkey , " ajouter un user au room ", roomInfo.room,   " voici le reste contenu du message serveur ", populatedMessage, " et celle venant du client ", messageData);
       io.to(roomkey).emit("newMessage", populatedMessage);
       socket.emit("message:created", {
