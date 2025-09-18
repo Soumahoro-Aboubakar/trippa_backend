@@ -6,7 +6,7 @@ const Schema = mongoose.Schema;
 const UserSchema = new Schema(
   {
     userPseudo: { type: String },
-    phone: { type: String, required: true },
+    phone: { type: String, required: true , unique : true },
     countryCode : { type: String, required: true},
     refreshTokens: [{ deviceId: String, token: String }],
     phoneHash: String,
@@ -261,7 +261,7 @@ UserSchema.pre('save', function(next) {
   }
   next();
 }); */
-
-UserSchema.index({ "phoneHash": 1 })
+UserSchema.index({ phone: 1 }, { unique: true });
+//UserSchema.index({ "phoneHash": 1 })
 const User = mongoose.model("User", UserSchema);
 export default User;

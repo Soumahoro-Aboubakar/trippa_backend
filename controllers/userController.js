@@ -92,6 +92,8 @@ export const generateToken = (userId) => {
     expiresIn: process.env.TOKEN_EXPIRATION,
   });
 };
+
+/*
 export const createUser = async (socket, userData) => {
   try {
     const { phone, countryCode, currentUserPublicKey } = userData; //exemple countryCode : CI pour la cote d'ivoire, SN pour le sénégal,
@@ -168,7 +170,77 @@ export const createUser = async (socket, userData) => {
         "Une erreur est survenue lors de la création de l'utilisateur. Veuillez réessayer.",
     });
   }
+}; */
+
+export const createUser = async (socket, userData) => {
+  try {
+    const { phone, countryCode, currentUserPublicKey } = userData;
+
+    // ✅ Vérifications basiques
+    if (!phone || typeof phone !== "string") {
+      socket.emit("user:error", {
+        message: "Le numéro de téléphone est requis et doit être valide.",
+      });
+      return;
+    }
+
+    if (!countryCode || typeof countryCode !== "string" || countryCode.length < 2) {
+      socket.emit("user:error", {
+        message: "Le country code est requis et doit être valide.",
+      });
+      return;
+    }
+
+    if (!currentUserPublicKey || typeof currentUserPublicKey !== "string") {
+      socket.emit("user:error", {
+        message: "La clé publique de l'utilisateur est requise et doit être valide.",
+      });
+      return;
+    }
+
+    // ✅ Normalisation
+    const trimmedPhone = phone.trim();
+    const code = generateCode();
+    const now = new Date();
+
+    // ✅ Génération KSD seulement en cas de création
+    const ksdGenerate = await generateUniqueKSD();
+    const KSD = `${countryCode?.toUpperCase()}-${ksdGenerate}`;
+
+    // ✅ Mise à jour si existe, sinon création
+    const user = await User.findOneAndUpdate(
+      { phone: trimmedPhone }, // filtre
+      {
+        $set: {
+          countryCode: countryCode.toUpperCase(),
+          "userKeys.currentUserPublicKey": currentUserPublicKey,
+          verifyCode: { code, createdAt: now },
+        },
+        $setOnInsert: {
+          phone: trimmedPhone,
+          KSD,
+          "userKeys.lastUserPublicKey": "",
+          createdAt: now,
+        },
+      },
+      { new: true, upsert: true } // new = retourne le doc modifié, upsert = insert si absent
+    );
+
+    console.log(user?.verifyCode?.code, "   ✅ code de validation généré");
+
+    //await sendVerificationCode(trimmedPhone, code);
+
+    socket.emit("verification:sent", {
+      message: "Un code de vérification a été envoyé à votre numéro de téléphone.",
+    });
+  } catch (error) {
+    console.error("❌ Erreur lors de la création de l'utilisateur :", error);
+    socket.emit("user:error", {
+      message: "Une erreur est survenue lors de la création de l'utilisateur. Veuillez réessayer.",
+    });
+  }
 };
+
 
 // === Fonctions utilitaires ===
 
