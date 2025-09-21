@@ -277,169 +277,130 @@ export default function alertHandlers(io, socket) {
   });
 }
 
-export const socketMessageHandlers = (io, socket) => {
-  /* async function ensureRoomExists(socket, upload) {
-    // Si une room est déjà spécifiée, l'utiliser
-    const checkRoom = await Room.findOne({ id: upload.room.id });
-    if (checkRoom) {
-      return { roomId: upload.room.id, isNew: false };
+class MessageStatusService {
+  static async updateMessagesStatus(data, userId) {
+    const { messagesIds, status, receiverId, room } = data;
+
+    // Validation
+    if (!messagesIds?.length || !status || !receiverId || !room) {
+      throw new Error("Données manquantes");
     }
 
-    if (!upload.isGroup) {
-      const room = new Room({
-        members: [socket.userData._id, upload.receiver],
-        isGroup: false,
-        isPrivate: true,
-        accessCode: null,
-        creator: socket.userData._id,
-      });
-    } else {
-      const accessCode = await generateGroupAccessCode(upload.room.accessCode);
-      const room = new Room({
-        members: upload.room.members,
-        isGroup: false,
-        isPrivate: true,
-        accessCode: accessCode,
-        creator: socket.userData._id,
-      });
-
-      const handleUsersRoom = async () => {
-        for (let i = 0; i < upload.room.members.length; i++) {
-          let currentUserId = upload.room.members[i];
-          User.findByIdAndUpdate(
-              currentUserId,
-            { $push: { rooms: upload.room.id} },
-            { new: true }
-          );
-        }
-      };
-      console.log("Pendant la creation", room);
-      // Sauvegarder la room et mettre à jour les utilisateurs
-      const [savedRoom, updatedSender, updatedReceiver] = await Promise.all([
-        room.save(),
-        User.findByIdAndUpdate(
-          socket.userData._id,
-          { $push: { rooms: room._id } },
-          { new: true }
-        ),
-        handleUsersRoom(),
-      ]);
+    if (!["DELIVERED", "READ", "UNREAD"].includes(status)) {
+      throw new Error("Status non supporté");
     }
 
-   
+    try {
+      // 1. Vérifier que la room existe
+      const roomData = await Room.findOne({ id: room });
+      if (!roomData) throw new Error("Room introuvable");
 
-    // Joindre les utilisateurs à la room
-  //  socket.join(savedRoom._id);
+      // 2. Mettre à jour les messages
+      const updateResult = await Message.updateMany(
+        {
+          id: { $in: messagesIds },
+          // Seulement mettre à jour si le nouveau statut est "supérieur"
+          $expr: {
+            $lt: [
+              {
+                $indexOfArray: [
+                  ["SENT", "DELIVERED", "UNREAD", "READ"],
+                  "$status",
+                ],
+              },
+              {
+                $indexOfArray: [
+                  ["SENT", "DELIVERED", "UNREAD", "READ"],
+                  status,
+                ],
+              },
+            ],
+          },
+        },
+        { $set: { status, updatedAt: new Date() } }
+      );
 
-    // Joindre le destinataire s'il est connecté
-    if (global.connectedUsers.has(upload.receiver)) {
-      const receiverSocketsId = global.connectedUsers.get(upload.receiver);
-      const receiverSocket = io.sockets.sockets.get(receiverSocketsId);
-      if (receiverSocket) {
-        receiverSocket.join(savedRoom._id);
+      if (updateResult.modifiedCount === 0) {
+        throw new Error("Aucun message mis à jour");
       }
-    }
 
-    return { roomId: savedRoom._id, isNew: true };
-  } */
-  /*  socket.on('start_upload', (metadata) => {
-    // Initialiser l'upload avec toutes les métadonnées nécessaires
-    activeUploads.set(metadata.fileId, {
-      ...metadata, // fileID, fileName, mimeType, mediaType, messageType, targetId, content, isAnonymous, totalChunks, mediaDuration
-      buffer: new Array(metadata.totalChunks), // Préallouer le tableau avec la taille exacte
-      receivedChunks: new Set(),
-      messageText: metadata.messageText,
-      startTime: Date.now() // Ajouter un timestamp pour surveiller la durée de l'upload
+      // 3. Gérer les notifications
+      const notification = await this.handleStatusNotification({
+        messagesIds,
+        status,
+        senderId: userId,
+        receiverId,
+        roomId: roomData._id,
+        modifiedCount: updateResult.modifiedCount,
+      });
+
+      /*   return {
+        success: true,
+        modifiedCount: updateResult.modifiedCount,
+        roomId: roomData._id,
+      }; */
+      return notification;
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  static async handleStatusNotification(data) {
+    const { messagesIds, status, senderId, receiverId, roomId, modifiedCount } =
+      data;
+
+    // Stratégie : Une notification par room et par statut, mise à jour plutôt que création multiple
+    const existingNotification = await Notification.findOne({
+      type: "message_status_changed",
+      sender: senderId,
+      recipient: receiverId,
+      "content.room": roomId,
+      "content.status": status,
+      status: "CREATED", // Seulement les non-délivrées
     });
 
-    // Confirmer le début de l'upload au client
-    socket.emit('upload_started', { fileId: metadata.fileId });
-  });
+    if (existingNotification) {
+      // Fusionner les messagesIds et mettre à jour le timestamp
+      const uniqueMessageIds = [
+        ...new Set([
+          ...existingNotification.content.messagesIds,
+          ...messagesIds,
+        ]),
+      ];
 
-  socket.on('file_chunk', async ({ fileId, index, data }) => {
-    const upload = activeUploads.get(fileId);
+      existingNotification.content.messagesIds = uniqueMessageIds;
+      existingNotification.content.count = uniqueMessageIds.length;
+      existingNotification.updatedAt = new Date();
 
-    // Vérifier si l'upload existe
-    if (!upload) {
-      return socket.emit('message:error', { error: 'Upload non trouvé' });
-    }
-
-    // Ajouter le chunk au buffer
-    upload.buffer[index] = Buffer.from(data);
-    upload.receivedChunks.add(index);
-
-    // Envoyer un accusé de réception du chunk
-    socket.emit('chunk_received', { fileId, index });
-
-    // Vérifier si l'upload est complet
-    if (upload.receivedChunks.size === upload.totalChunks) {
-      try {
-        // Traitement parallèle: vérifier/créer la room et traiter le média simultanément
-        const [roomInfo, mediaInfo] = await Promise.all([
-          ensureRoomExists(socket, upload),
-          handleMediaUpload(socket, {
-            fileName: upload.fileName,
-            mimeType: upload.mimeType,
-            buffer: upload.buffer,
-            mediaDuration: upload.mediaDuration
-          })
-        ]);
-
-        // Utiliser l'ID de la room obtenue
-        const roomId = roomInfo.roomId;
-
-        // Créer et sauvegarder le message
-        const message = new Message({
-          sender: socket.userData._id,
-          room: roomId,
-          type: upload.mediaType,
-          content: upload.messageText,
-          isAnonymous: upload.isAnonymous,
-          ...mediaInfo
-        });
-
-        // Sauvegarder et peupler en une seule opération
-        const savedMessage = await message.save();
-        const populatedMessage = await Message.findById(savedMessage._id)
-          .populate('sender', 'userPseudo profile.photo');
-
-        // Diffuser le message
-        io.to(roomId?.toString()).emit('new:message', populatedMessage);
-
-        // Nettoyer les ressources
-        activeUploads.delete(fileId);
-
-        // Confirmer que l'upload est terminé
-        socket.emit('upload_complete', {
-          fileId,
-          messageId: savedMessage._id,
-          processingTime: Date.now() - upload.startTime
-        });
-
-      } catch (error) {
-        console.error('Erreur lors du traitement du fichier:', error);
-        socket.emit('message:error', {
-          fileId,
-          error: error.message,
-          code: error.code || 'PROCESSING_ERROR'
-        });
-
-        // Nettoyage en cas d'erreur
-        activeUploads.delete(fileId);
-      }
+      await existingNotification.save();
+      return existingNotification;
     } else {
-      // Informer le client de la progression
-      if (upload.receivedChunks.size % 5 === 0 || upload.receivedChunks.size === Math.floor(upload.totalChunks / 2)) {
-        socket.emit('upload_progress', {
-          fileId,
-          received: upload.receivedChunks.size,
-          total: upload.totalChunks,
-          progress: Math.floor((upload.receivedChunks.size / upload.totalChunks) * 100)
-        });
-      }
-    }
-  }); */
+      // Créer une nouvelle notification
+      const newNotification = new Notification({
+        type: "message_status_changed",
+        status: "CREATED",
+        sender: senderId,
+        recipient: receiverId,
+        relatedEntity: {
+          entityType: "Room",
+          entityId: roomId,
+        },
+        content: {
+          room: roomId,
+          messagesIds,
+          status,
+          count: messagesIds.length,
+        },
+        priority: status === "READ" ? "low" : "normal",
+      });
 
+      await newNotification.save();
+      return newNotification;
+    }
+  }
+}
+
+export const socketMessageHandlers = (io, socket) => {
   const roomCache = new Map();
 
   async function ensureRoomExists(socket, upload, session) {
@@ -587,20 +548,28 @@ export const socketMessageHandlers = (io, socket) => {
 
       const filterData = userDataToSelect(messageData.sender, message.receiver);
       const savedMessage = await newMessage.save({ session });
-      const populatedMessage = await Message.findById(
-        savedMessage._id
-      ).populate([
-        { path: "sender", select: filterData },
-        { path: "receiver", select: filterData },
-     
-      ]).populate("room").lean();//68cb438bea019499c3f78cf768cb3c11ea019499c3f78c70
-    console.log("message:created événement pour roomKey : " , roomkey , " ajouter un user au room ", roomInfo.room,   " voici le reste contenu du message serveur ", populatedMessage, " et celle venant du client ", messageData);
+      const populatedMessage = await Message.findById(savedMessage._id)
+        .populate([
+          { path: "sender", select: filterData },
+          { path: "receiver", select: filterData },
+        ])
+        .populate("room")
+        .lean(); //68cb438bea019499c3f78cf768cb3c11ea019499c3f78c70
+      console.log(
+        "message:created événement pour roomKey : ",
+        roomkey,
+        " ajouter un user au room ",
+        roomInfo.room,
+        " voici le reste contenu du message serveur ",
+        populatedMessage,
+        " et celle venant du client ",
+        messageData
+      );
       io.to(roomkey).emit("newMessage", populatedMessage);
       socket.emit("message:created", {
         code: 200,
         message: "Message enregistré dans la db",
       });
-
     } catch (error) {
       console.error("Erreur lors de l'envoi du message texte:", error);
       socket.emit("message:error", { error: error.message });
@@ -608,7 +577,7 @@ export const socketMessageHandlers = (io, socket) => {
       session.endSession();
     }
   });
-
+  /*
   socket.on("updateMessagesStatus", async (messageData, callback) => {
     const parsed = dataParse(messageData);
     if (!parsed) {
@@ -622,23 +591,40 @@ export const socketMessageHandlers = (io, socket) => {
         return callback({ error: "Données manquantes", code: 400 });
       }
       const roomData = await Room.findOne({ id: room });
-      if (!roomData)
-        return callback({ error: "Room introuvable", code: 400 });
+      if (!roomData) return callback({ error: "Room introuvable", code: 400 });
 
       await Message.updateMany(
         { id: { $in: messagesIds } },
         { $set: { status } }
       );
-
-      const newNotification = new Notification({
-        type: "message_status_changed",
-        status: "CREATED",
-        sender: socket.userData._id,
-        recipient: receiverId,
-        relatedEntity: "Room",
-        entityId : roomData._id,
-        content: {  room : roomData._id, messagesIds },
-      });
+      let newNotification;
+      //Nous allons d'abord vérifier si une le status est "DELIVERED" ou "SEEN", Si DELIVERED, on crée une notification sinon on motifie la notification existante;
+      if (status !== "DELIVERED" && status !== "READ" && status != "UNREAD")
+        return callback({ error: "Status non supporté", code: 400 });
+      if (status === "DELIVERED") {
+        newNotification = new Notification({
+          type: "message_status_changed",
+          status: "CREATED",
+          sender: socket.userData._id,
+          recipient: receiverId,
+          relatedEntity: "Room",
+          entityId: roomData._id,
+          content: { room: roomData._id, messagesIds , status }, //messageIds est un tableau
+        });
+      } else {
+        newNotification = await Notification.findOneAndUpdate(
+          {
+            type: "message_status_changed",
+            sender: socket.userData._id,
+            recipient: receiverId,
+            relatedEntity: "Room",
+            entityId: roomData._id,
+            "content.room": roomData._id,
+            "content.status": status,
+          }
+        );
+        
+      }
 
       await newNotification.save();
 
@@ -655,44 +641,82 @@ export const socketMessageHandlers = (io, socket) => {
         code: 500,
       });
     }
+  }); */
+
+  socket.on("updateMessagesStatus", async (messageData, callback) => {
+    const parsed = dataParse(messageData);
+    if (!parsed) {
+      return callback({ error: "Données introuvables", code: 400 });
+    }
+
+    try {
+      const result = await MessageStatusService.updateMessagesStatus(
+        parsed,
+        socket.userData._id
+      );
+
+      // Émettre la notification seulement en cas de succès
+      if (result) {
+        // Émettre à la room concernée
+        /*  io.to(parsed.room.toString()).emit("messagesStatusUpdated", {
+          messagesIds: parsed.messagesIds,
+          status: parsed.status,
+          sendBy: socket.userData._id,
+        }); */
+        io.to(parsed.room.toString()).emit("messagesStatusUpdated", {
+          notification: result,
+         /* messagesIds: parsed.messagesIds,
+          status: parsed.status, */
+          sendBy: socket.userData._id?.toString(), 
+          code : 200
+        });
+      }
+
+      callback({ message: "Mise à jour réussie", code: 200 });
+    } catch (error) {
+      console.error("Erreur updateMessagesStatus:", error);
+      callback({
+        message: error.message || "Une erreur est survenue",
+        code: error.message === "Données manquantes" ? 400 : 500,
+      });
+    }
   });
 
   socket.on("updateNotificationStatus", async (notificationData, callback) => {
     const parsedData = dataParse(notificationData);
     if (!parsedData) {
-        return callback({ error: "Données manquantes", code: 400 });
+      return callback({ error: "Données manquantes", code: 400 });
     }
-    
+
     const { notificationId, status } = parsedData;
     if (!notificationId || !status) {
-        return callback({ error: "Données manquantes", code: 400 });
+      return callback({ error: "Données manquantes", code: 400 });
     }
-    
+
     try {
-        const notification = await Notification.findByIdAndUpdate(
-            notificationId, 
-            { status: status },
-            { new: true }
-        );
-        
-        if (!notification) {
-            return callback({ error: "Notification non trouvée", code: 404 });
-        }
-        
-        callback({ 
-            success: true, 
-            data: notification,
-            message: "Statut de la notification mis à jour avec succès" 
-        });
-        
+      const notification = await Notification.findByIdAndUpdate(
+        notificationId,
+        { status: status },
+        { new: true }
+      );
+
+      if (!notification) {
+        return callback({ error: "Notification non trouvée", code: 404 });
+      }
+
+      callback({
+        success: true,
+        data: notification,
+        message: "Statut de la notification mis à jour avec succès",
+      });
     } catch (error) {
-        console.error("Erreur lors de la mise à jour de la notification:", error);
-        callback({ 
-            error: "Erreur serveur lors de la mise à jour", 
-            code: 500 
-        });
+      console.error("Erreur lors de la mise à jour de la notification:", error);
+      callback({
+        error: "Erreur serveur lors de la mise à jour",
+        code: 500,
+      });
     }
-});
+  });
 
   socket.on("fetchNewMessages", async ({ roomId }) => {
     const roomObjectId = new mongoose.Types.ObjectId(String(roomId));
@@ -837,13 +861,18 @@ export const setupErrorHandlers = (socket) => {
 };
 
 export const sendReceivedMessages = async (socket) => {
- socket.on("getNewMessages", async (data)=>{
-   console.log(" l'utilisateur veux récupérer ses informations : getNewMessages data", data);
-   try {
-    const newMessages = await Message.getReceivedMessages(socket.userData._id);
-    socket.emit("newMessages", { messages: newMessages, code: 200 });
-  } catch (error) {
-    console.error("Erreur lors de la récupération des messages :", error);
-  }
- })
+  socket.on("getNewMessages", async (data) => {
+    console.log(
+      " l'utilisateur veux récupérer ses informations : getNewMessages data",
+      data
+    );
+    try {
+      const newMessages = await Message.getReceivedMessages(
+        socket.userData._id
+      );
+      socket.emit("newMessages", { messages: newMessages, code: 200 });
+    } catch (error) {
+      console.error("Erreur lors de la récupération des messages :", error);
+    }
+  });
 };

@@ -25,7 +25,14 @@ import https from "https";
 import { joinUserRooms } from "./controllers/userController.js";
 import {  sendUnreadNotifications } from "./services/notificationService.js";
 
+//~/llama.cpp/build/bin/llama-server --model /home/soumahoro/models_AI/codellama-7b-instruct.Q4_K_M.gguf --port 8080 --threads 2
+/*
 
+🧠 Utilisation dans VS Code avec l'extension Continue
+
+Pour intégrer le serveur dans VS Code via l'extension Continue, suivez ces étapes :
+
+Installez l'extension Continue depuis le Visual Studio Marketplace*/
 dotenv.config();
 // Configuration d'Express
 const app = express();
